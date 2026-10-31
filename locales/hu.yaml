@@ -741,6 +741,7 @@ gateway:
     subagent_working_head: "⏳ Az alügynök dolgozik"
     compressing_head: "⏳ Kontextus tömörítése"
     queued_head: "⏳ Sorba állítva a következő körre"
+    dispatcher_note: "\n_This chat is a dispatcher session: a message sent while it works redirects or steers the running turn, or waits for the next one, and never interrupts it. The setting above does not change that (`dispatcher.busy.policy: inherit` restores it)._"
     queued_tail: ". Válaszolok, amint a jelenlegi feladat befejeződik."
     interrupting_head: "⚡ A jelenlegi feladat megszakítása"
     interrupting_tail: ". Hamarosan válaszolok az üzenetedre."

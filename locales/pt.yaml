@@ -731,6 +731,7 @@ gateway:
     subagent_working_head: "⏳ Subagente trabalhando"
     compressing_head: "⏳ Comprimindo contexto"
     queued_head: "⏳ Na fila para o próximo turno"
+    dispatcher_note: "\n_This chat is a dispatcher session: a message sent while it works redirects or steers the running turn, or waits for the next one, and never interrupts it. The setting above does not change that (`dispatcher.busy.policy: inherit` restores it)._"
     queued_tail: ". Responderei quando a tarefa atual terminar."
     interrupting_head: "⚡ Interrompendo a tarefa atual"
     interrupting_tail: ". Responderei à sua mensagem em breve."

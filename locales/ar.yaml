@@ -731,6 +731,7 @@ gateway:
     subagent_working_head: "⏳ الوكيل الفرعي يعمل"
     compressing_head: "⏳ جارٍ ضغط السياق"
     queued_head: "⏳ في قائمة الانتظار للدور التالي"
+    dispatcher_note: "\n_This chat is a dispatcher session: a message sent while it works redirects or steers the running turn, or waits for the next one, and never interrupts it. The setting above does not change that (`dispatcher.busy.policy: inherit` restores it)._"
     queued_tail: ". سأردّ بعد انتهاء المهمة الحالية."
     interrupting_head: "⚡ جارٍ مقاطعة المهمة الحالية"
     interrupting_tail: ". سأردّ على رسالتك بعد قليل."

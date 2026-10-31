@@ -731,6 +731,7 @@ gateway:
     subagent_working_head: "⏳ 서브에이전트 작업 중"
     compressing_head: "⏳ 컨텍스트 압축 중"
     queued_head: "⏳ 다음 턴 대기열에 추가됨"
+    dispatcher_note: "\n_This chat is a dispatcher session: a message sent while it works redirects or steers the running turn, or waits for the next one, and never interrupts it. The setting above does not change that (`dispatcher.busy.policy: inherit` restores it)._"
     queued_tail: ". 현재 작업이 끝나면 응답할게요."
     interrupting_head: "⚡ 현재 작업 중단 중"
     interrupting_tail: ". 곧 메시지에 응답할게요."

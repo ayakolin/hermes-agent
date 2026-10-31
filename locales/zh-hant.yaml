@@ -731,6 +731,7 @@ gateway:
     subagent_working_head: "⏳ 子代理工作中"
     compressing_head: "⏳ 正在壓縮上下文"
     queued_head: "⏳ 已排入下一輪佇列"
+    dispatcher_note: "\n_This chat is a dispatcher session: a message sent while it works redirects or steers the running turn, or waits for the next one, and never interrupts it. The setting above does not change that (`dispatcher.busy.policy: inherit` restores it)._"
     queued_tail: "。目前任務完成後我會回覆。"
     interrupting_head: "⚡ 正在中斷目前任務"
     interrupting_tail: "。我很快就會回覆你的訊息。"

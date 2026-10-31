@@ -731,6 +731,7 @@ gateway:
     subagent_working_head: "⏳ Fo-ghníomhaire ag obair"
     compressing_head: "⏳ Ag dlúthú an chomhthéacs"
     queued_head: "⏳ I scuaine don chéad seal eile"
+    dispatcher_note: "\n_This chat is a dispatcher session: a message sent while it works redirects or steers the running turn, or waits for the next one, and never interrupts it. The setting above does not change that (`dispatcher.busy.policy: inherit` restores it)._"
     queued_tail: ". Freagróidh mé nuair a chríochnóidh an tasc reatha."
     interrupting_head: "⚡ Ag cur isteach ar an tasc reatha"
     interrupting_tail: ". Freagróidh mé do theachtaireacht go luath."

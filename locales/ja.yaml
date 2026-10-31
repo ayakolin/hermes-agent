@@ -731,6 +731,7 @@ gateway:
     subagent_working_head: "⏳ サブエージェントが作業中"
     compressing_head: "⏳ コンテキストを圧縮中"
     queued_head: "⏳ 次のターンにキューしました"
+    dispatcher_note: "\n_This chat is a dispatcher session: a message sent while it works redirects or steers the running turn, or waits for the next one, and never interrupts it. The setting above does not change that (`dispatcher.busy.policy: inherit` restores it)._"
     queued_tail: "。現在のタスクが完了したら応答します。"
     interrupting_head: "⚡ 現在のタスクを中断中"
     interrupting_tail: "。まもなくメッセージに応答します。"
