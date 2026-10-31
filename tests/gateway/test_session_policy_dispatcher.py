@@ -62,6 +62,9 @@ def test_the_toolsets_stay_frozen_when_the_profile_changes(cwd):
     ({"source": "acp"}, {}),
     ({"source": "tool"}, {}),
     ({"source": "cli", "toolsets": ["terminal"]}, {}),
+    # A client that sent its own shell environment was proven local, and such a client cannot receive a
+    # background result: its session keeps the surface it launched with.
+    ({"source": "cli", "client_env": {"PATH": "/client/bin"}}, {}),
     ({"source": "cli", "safe_mode": True, "model": "m"}, {}),
     ({"source": "cli"}, {"dispatcher": {"enabled": False}}),
     ({"source": "cli"}, {"agent": {"coding_context": "focus"}}),
