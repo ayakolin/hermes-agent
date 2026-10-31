@@ -132,18 +132,21 @@ def should_defer_compaction(agent: Any, request_tokens: int) -> bool:
 
     All of: a dispatcher session with ``defer_compaction``; a compressor with prepared-compaction state
     whose pass is running (a ready summary splices at once, no pass means the legacy path); no memory
-    provider supplying summary context; and a request below
-    ``max(threshold_tokens, defer_ceiling_ratio * context_length)``. A pass that fails or never finishes
-    cannot defer past the ceiling, and the synchronous compaction that follows waits for a running pass
-    that fits instead of writing the summary twice. Cheap: attribute reads under one short lock, no
-    transcript hashing; a prepared summary that no longer matches is found by ``compress()`` itself and
-    costs what it cost before."""
+    provider supplying summary context, and none that already did
+    (``stop_for_provider_context`` latched ``_needs_provider_context``, which also stops further passes);
+    and a request below ``max(threshold_tokens, defer_ceiling_ratio * context_length)``. A pass that fails
+    or never finishes cannot defer past the ceiling, and the synchronous compaction that follows waits for
+    a running pass that fits instead of writing the summary twice. Cheap: attribute reads under one short
+    lock, no transcript hashing; a prepared summary that no longer matches is found by ``compress()``
+    itself and costs what it cost before."""
     latency = dispatcher_latency(agent)
     if latency is None or not latency.defer_compaction:
         return False
     compressor = getattr(agent, "context_compressor", None)
     prepared = getattr(compressor, "prepared_compaction", None)
-    if prepared is None or prepared.state() != "running" or memory_supplies_compaction_context(agent):
+    if prepared is None or prepared.state() != "running" or prepared.needs_fresh_summary():
+        return False
+    if memory_supplies_compaction_context(agent):
         return False
     threshold = int(getattr(compressor, "threshold_tokens", 0) or 0)
     ceiling = max(threshold, int(latency.defer_ceiling_ratio * int(getattr(compressor, "context_length", 0) or 0)))

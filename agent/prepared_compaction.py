@@ -280,6 +280,11 @@ class PreparedCompaction:
             pending = self._pending
             return "running" if pending is not None and not pending.cancelled.is_set() else "none"
 
+    def needs_fresh_summary(self) -> bool:
+        """True once a compaction needed memory-provider context: every summary is written fresh from then
+        on (``take()`` refuses the candidate and ``_blocked`` starts no pass), so nothing can be waited for."""
+        return self._needs_provider_context
+
     def stop_for_provider_context(self) -> None:
         """A memory provider supplied summary context: stop preparing summaries that would be discarded."""
         if not self._needs_provider_context:

@@ -675,7 +675,10 @@ it is the handoff the transcript now carries.
 
 With `compression.prepare_ahead: true` (read at agent construction, so it takes effect on the next
 session or gateway agent rebuild), `agent/prepared_compaction.py` writes the next summary before
-the trigger fires. When the last provider-reported prompt count is within 12% of the trigger
+the trigger fires. A dispatcher session enables it implicitly when `dispatcher.latency.defer_compaction`
+is on (`agent/dispatcher_latency.py`: `wants_prepared_compaction` → `agent_init`), except when its
+memory provider overrides `on_pre_compress` — such a provider's context makes every prepared summary
+useless, so no pass is started for it and deferral is off for that session. When the last provider-reported prompt count is within 12% of the trigger
 (`threshold_tokens`) below it, the turn loop starts one background pass, before a tool batch runs or
 at turn end. Turn-end passes are skipped for cron runs, delegated children and one-shot sessions
 (`hermes chat -q`, `-z`), whose agents end with the turn. The pass plans the same window `compress()` plans (`_plan_compaction_window`) and calls

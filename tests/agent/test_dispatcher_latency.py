@@ -13,6 +13,7 @@ session-mode package. Contracts:
 """
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +25,8 @@ from agent.dispatcher_latency import (
 )
 from agent.memory_manager import MemoryManager
 from agent.memory_provider import MemoryProvider
+from agent.turn_context import _collect_pre_llm_call_context
+from hermes_cli.plugins import PluginManager
 from run_agent import AIAgent
 
 
@@ -138,3 +141,58 @@ def test_explicit_prepare_ahead_is_honoured_even_with_such_a_provider(monkeypatc
 ])
 def test_wants_prepared_compaction_table(latency, prepare_ahead, expected):
     assert wants_prepared_compaction(SimpleNamespace(_dispatcher_latency=latency), prepare_ahead) is expected
+
+
+def test_a_failing_config_load_still_leaves_a_dispatcher_agent_with_defaults(monkeypatch):
+    """The trims themselves never fail an init: an unreadable config freezes the defaults, not None."""
+    monkeypatch.setattr("agent.dispatcher_session.agent_is_dispatcher", lambda _agent: True)
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly",
+                        lambda: (_ for _ in ()).throw(OSError("unreadable config")))
+    with (
+        patch("model_tools.get_tool_definitions", return_value=[]),
+        patch("model_tools.check_toolset_requirements", return_value={}),
+        patch("agent.process_bootstrap.OpenAI"),
+        patch("agent.model_metadata.get_model_context_length", return_value=200_000),
+        patch("agent.context_compressor.get_model_context_length", return_value=200_000),
+    ):
+        agent = AIAgent(api_key="test-key-1234567890", base_url="https://openrouter.ai/api/v1",
+                        model="test/model", quiet_mode=True, skip_context_files=True, skip_memory=True,
+                        max_iterations=2)
+    assert agent._dispatcher_latency == DispatcherLatency(2.0, 3.0, True, 0.85, True)
+
+
+def test_the_turn_s_pre_llm_call_hook_reads_the_frozen_budget(monkeypatch, tmp_path):
+    """Wiring: the frozen budget reaches the turn's hook dispatch, and a callback slower than it is
+    abandoned rather than allowed to hold the first token (no suppression: see tests/hermes_cli/test_hook_budget.py)."""
+    agent = _build(monkeypatch, tmp_path, dispatcher=True,
+                   config="dispatcher:\n  latency:\n    pre_llm_call_budget_s: 0.3\n")
+    assert pre_llm_call_budget_s(agent) == 0.3
+    hold, calls = threading.Event(), []
+    # Safety net: if the budget were ignored the collector blocks until this releases; keep a failing run
+    # short (the release lands long after the budget either abandons the callback or the assertion fires).
+    threading.Timer(2.0, hold.set).start()
+
+    def slow_plugin(**_kwargs):
+        calls.append("slow")
+        hold.wait(timeout=10)
+        return {"context": "late"}
+
+    manager = PluginManager()
+    monkeypatch.setattr("hermes_cli.plugins._delivery_manager", lambda: manager)
+    # This runner's spawned workers may carry the safe-worker policy, under which lifecycle skips hooks.
+    monkeypatch.setattr("agent.safe_worker_policy._policy", None)
+    monkeypatch.setattr("hermes_cli.plugins._resolve_hook_callback_timeout", lambda: 30.0)
+
+    def collect():
+        return _collect_pre_llm_call_context(
+            agent, effective_task_id="t1", turn_id="turn-1", original_user_message="hi",
+            messages=[{"role": "user", "content": "hi"}], conversation_history=None,
+        )
+
+    collect()  # warm the observer's imports: a process-level one-time cost, not per-turn dispatch
+    manager._hooks["pre_llm_call"] = [slow_plugin]
+    try:
+        # No hook_budget here: the collector must open the frozen budget itself, or this call blocks.
+        assert collect() == "" and calls == ["slow"]
+    finally:
+        hold.set()

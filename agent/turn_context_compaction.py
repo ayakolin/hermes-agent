@@ -87,8 +87,10 @@ def _blocked_compress_reason(
     return _reason
 
 
-def _apply_grown_window(agent: Any, compressor: Any, grown: int) -> None:
-    """A managed local runtime granted a bigger window: recalibrate the compressor."""
+def _apply_grown_window(agent: Any, compressor: Any, grown: Optional[int]) -> bool:
+    """A managed local runtime granted a bigger window: recalibrate the compressor. False when none was."""
+    if not grown:
+        return False
     compressor.update_model(
         agent.model, grown, base_url=getattr(agent, "base_url", "") or "",
         api_key=getattr(agent, "api_key", "") or "",
@@ -99,6 +101,7 @@ def _apply_grown_window(agent: Any, compressor: Any, grown: int) -> None:
         f"📈 Context window grown to {grown // 1024}K "
         f"(local model; conversation continues uncompressed)"
     )
+    return True
 
 
 def _refund_api_call(agent: Any, api_call_count: int) -> int:
@@ -229,17 +232,25 @@ def _codex_native_auto_compaction(agent: Any) -> bool:
 
 
 def _still_compress_after_window_growth(agent: Any, compressor: Any, tokens: int) -> bool:
-    """Managed local runtime: growing the window beats compressing (ladder order; same seam as
-    _maybe_grow_local_window in the loop). Returns whether compression is still wanted."""
-    try:
-        from agent.conversation_loop import _maybe_grow_local_window
-
-        grown = _maybe_grow_local_window(agent, compressor, tokens)
-    except Exception:
-        grown = None
-    if not grown:
+    """Ladder order, kept unchanged: a managed local runtime may grant a bigger window right here (the same
+    seam the loop's preflight gate uses) instead of compressing. True when compression is still wanted.
+    Skip the probe when the agent carries no provider/base_url: there is nothing to grow."""
+    if not (getattr(agent, "provider", "") or getattr(agent, "base_url", "")):
         return True
-    _apply_grown_window(agent, compressor, grown)
+    return _compress_after_window_growth(agent, compressor, tokens)
+
+
+def _compress_after_window_growth(agent: Any, compressor: Any, tokens: int) -> bool:
+    """Grow first. True when compression is still wanted afterwards."""
+    from agent.conversation_loop import _maybe_grow_local_window
+
+    try:
+        grown = _maybe_grow_local_window(agent, compressor, tokens)
+    except Exception:  # health: allow BLE001 -- a runtime probe on an optional local feature must not break the turn (pre-existing behaviour); the traceback is logged
+        logger.warning("local window growth check failed; compressing instead", exc_info=True)
+        return True
+    if not _apply_grown_window(agent, compressor, grown):
+        return True
     return compressor.should_compress(tokens)
 
 

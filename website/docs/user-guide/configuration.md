@@ -1130,6 +1130,48 @@ Points at a custom OpenAI-compatible endpoint. Uses `OPENAI_API_KEY` for auth.
 | `nous` / `openrouter` / etc. | not set | Force that provider, use its auth |
 | any | set | Use the custom endpoint directly (provider ignored) |
 
+### Dispatcher latency
+
+A dispatcher session (`dispatcher.enabled`, see the reference below) has to answer at once, so the work
+that runs before its first token is bounded. These keys apply only to such sessions; every other session
+keeps the original behaviour, and `0` / `false` restores it per key. They are read when the agent is
+built, so an edit reaches the next new session (or the next agent rebuild), not a cached one.
+
+```yaml
+dispatcher:
+  latency:
+    memory_budget_s: 2.0        # turn-start memory tick + recall, together; 0 = legacy (8s prefetch, unbounded tick)
+    pre_llm_call_budget_s: 3.0  # pre_llm_call plugins, together; 0 = only plugins.hook_callback_timeout
+    stream_deltas: true         # let platforms that opt in to streaming stream for dispatcher sessions
+    defer_compaction: true      # compact only once the background summary is ready (below)
+    defer_ceiling_ratio: 0.85   # stop deferring here: max(threshold, ratio x window)
+```
+
+`memory_budget_s` covers the external memory provider's per-turn tick and its recall query together. A
+provider that does not finish in that time loses this turn's recall (never the next turn's: a late answer
+would be about a different question), and its tick still runs to completion in the background; the next
+turn skips its tick while the previous one is still running rather than overlapping them. Completion and
+process notices are machine text, so a dispatcher session never spends this budget running recall on them.
+
+`pre_llm_call_budget_s` covers the same hook's first-party observer and every plugin callback. A callback
+that runs past the budget is abandoned for this turn, and — unlike one that hits
+`plugins.hook_callback_timeout` — it is not silenced for the next minute: it runs again on the next call.
+
+`defer_compaction` removes the summary call's wait from the turn. When an automatic compaction is due and
+the request is still below `max(threshold, defer_ceiling_ratio x window)`, a dispatcher session lets the
+background summary (the `prepare_ahead` machinery, enabled implicitly here) finish first and compacts on
+the following turn; past the ceiling it compacts synchronously, as always. Only the LLM wait is removed —
+the transcript rewrite itself still happens in the turn. Deferral is off for a session whose memory
+provider adds context to compaction summaries (`on_pre_compress`), since every prepared summary would be
+discarded, and it never applies to a provider-proven context overflow, to manual `/compress`, to plugin
+context engines, or to idle compaction.
+
+`stream_deltas: true` lets a dispatcher session stream text on a platform whose
+`display.platforms.<platform>.streaming` is explicitly `true` even while the global `streaming.enabled`
+switch is off; a platform that follows the global, an explicit per-platform `false` and `transport: off`
+all stay off, and non-dispatcher sessions are unchanged. It does not affect the classic CLI (where
+`display.streaming` remains the switch) or the TUI/Desktop, which already stream.
+
 ### Stream progress timeout
 
 When the summary streams (compression always streams over chat-completions and Responses routes, e.g. `openai-codex` or a custom OpenAI-compatible endpoint), two timeouts apply, and they are independent:
@@ -2662,6 +2704,8 @@ For separate natural mid-turn assistant updates without progressive token editin
 
 :::note Per-platform streaming defaults
 The master `streaming.enabled` switch is `false` by default — nothing streams until you flip it. Once enabled, streaming is decided **per platform**: Telegram ships with `display.platforms.telegram.streaming: true` (streams) and Discord with `display.platforms.discord.streaming: false` (does not). So after enabling streaming, Telegram streams out of the box and Discord stays on whole-message replies until you change its toggle. You can adjust these per-platform switches from the dashboard's **Channels** toggles or directly in `~/.hermes/config.yaml`.
+
+One exception to the master switch: a **dispatcher session** with `dispatcher.latency.stream_deltas: true` streams on the platforms that explicitly opt in, even while the master switch is off, so its first words reach the chat while the turn is still running. See [Dispatcher latency](#dispatcher-latency). Set `stream_deltas: false` (or the platform's own `streaming: false`) to keep the master switch final.
 :::
 
 ## Group Chat Session Isolation

@@ -103,6 +103,16 @@ prune committed outside the lease/fence. Compression is the sanctioned
 cache break — keep it the only one. Full detail:
 `website/docs/developer-guide/context-compression-and-caching.md`.
 
+Dispatcher sessions (`agent/dispatcher_session.py`, `agent/dispatcher_latency.py`) may defer an
+automatic compaction while the prepared summary is still being written: `should_defer_compaction`
+is consulted once per decision site (turn start after the grow check, pre-API, post-tool) and only
+the summary LLM wait is removed — the splice, the lease and the rewrite stay in the turn. It is off
+for a memory provider that overrides `on_pre_compress` and past `max(threshold, ratio × window)`,
+and never covers provider-proven overflow, manual `/compress` or plugin context engines.
+`agent/machine_turns.py` names the machine-text display kinds once (completion/process notices,
+hidden intents); recall is skipped for those turns at both prefetch sites. Keep the agent layer from
+importing `gateway/` constants — add a kind here, not there.
+
 ## Model and provider resolution
 
 - Runtime provider/model resolution and its precedence: `website/docs/developer-guide/provider-runtime.md`.
@@ -137,7 +147,10 @@ validation and `_normalize_lang` accept; `SUPPORTED_LANGUAGES` stays the bundled
 plugins; `agent/context_engine.py` drives context-engine plugins; `agent/image_gen_provider.py`
 image-gen plugins (all in `plugins/AGENTS.md`). `agent/curator.py` + `curator_backup.py` implement
 the skill curator (`skills/AGENTS.md`). Cron sessions pass `skip_memory=True` by default — memory
-providers intentionally do not run during cron.
+providers intentionally do not run during cron. `agent/memory_manager_bounded.py` is the dispatcher
+session's first-token path (`begin_turn_bounded`): one tick per provider in flight (a new turn skips
+its tick while the previous one is still running), recall bounded by the caller's deadline only —
+`prefetch_all(deadline=...)` never shortens the provider timeout the `_PREFETCH_GATE` judges it by.
 
 - End-of-session memory extraction and provider `on_session_end` run wherever the session ends —
   turn, eviction, shutdown, `tui_gateway` teardown — and the CALLER binds the owning profile's scope

@@ -201,7 +201,8 @@ def test_turn_start_defers_after_a_grown_window_too(scenario, monkeypatch):
 
 
 @pytest.mark.parametrize("case", [
-    "past-the-ceiling", "no-latency", "defer-off", "provider-context", "ready", "no-pass",
+    "past-the-ceiling", "no-latency", "defer-off", "provider-context", "provider-context-already-declared",
+    "ready", "no-pass",
 ])
 def test_turn_start_compacts_now_when_deferring_is_not_the_right_call(scenario, case):
     latency = {"no-latency": None, "defer-off": DispatcherLatency(2.0, 3.0, False, 0.85, True)}.get(case, LATENCY)
@@ -216,6 +217,10 @@ def test_turn_start_compacts_now_when_deferring_is_not_the_right_call(scenario, 
         scn.start_pass()
     if case == "ready":
         scn.finish_pass()
+    if case == "provider-context-already-declared":
+        # The compressor already learned a provider feeds the summary (stop_for_provider_context()):
+        # a running pass can only be discarded, so there is nothing to wait for.
+        scn.cc.prepared_compaction._needs_provider_context = True
     with pytest.raises(_Reached):
         scn.turn_start()
     assert scn.labels == ["turn_start_threshold"]

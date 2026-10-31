@@ -55,6 +55,12 @@ class PreflightGateVerdict:
     result: Optional[dict[str, Any]] = None
 
 
+def _defer_for_prepared_summary(agent: Any, request_pressure_tokens: int, provider_overflow_preflight: bool) -> bool:
+    """Whether this pre-API compaction decision waits for the background summary (dispatcher sessions only;
+    see ``agent/dispatcher_latency.py``). Never on a provider-proven overflow, which must compact now."""
+    return not provider_overflow_preflight and should_defer_compaction(agent, request_pressure_tokens)
+
+
 def run_preflight_compression(
     agent: Any, v: PreflightGateVerdict, *, compressor: Any, request_pressure_tokens: int,
     provider_overflow_preflight: bool, defer_preflight: Any, moa_prepared_request: Any,
@@ -101,9 +107,10 @@ def run_preflight_compression(
         and (not defer_preflight(request_pressure_tokens) or provider_overflow_preflight)
         and not _compression_cooldown
         and compressor.should_compress(request_pressure_tokens)
-        # Dispatcher session: wait for the summary a background pass is writing (never on a
-        # provider-proven overflow, which must compress now).
-        and (provider_overflow_preflight or not should_defer_compaction(agent, request_pressure_tokens))
+        # Dispatcher session: the background summary is still being written, so this pass sends the
+        # request as it is and the next one splices the finished summary. Never for a provider-proven
+        # overflow, and checked before the growth attempt so a granted window is not thrown away.
+        and not _defer_for_prepared_summary(agent, request_pressure_tokens, provider_overflow_preflight)
     ):
         # Managed local runtime: grow the context window before compressing (last
         # resort). Only for a llamacpp provider at the supervised base_url.
