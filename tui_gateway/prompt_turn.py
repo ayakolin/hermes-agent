@@ -779,8 +779,10 @@ def _invoke_agent(
         if getattr(agent, "_mute_notification_reply", False):
             return
         _emit("message.interim", sid, {"text": text, "already_streamed": already_streamed})
+    from agent.dispatcher_ack import agent_interim_forced, arm_ack_obligation, disarm_ack_obligation
     agent.interim_assistant_callback = (
-        _interim_assistant_cb if _load_interim_assistant_messages() else None)
+        _interim_assistant_cb
+        if _load_interim_assistant_messages() or agent_interim_forced(agent, _load_cfg()) else None)
     # A synthesized turn is typed at turn START so a crash persist writes a timeline event,
     # not a raw user bubble; the post-turn stamp is the fallback for an older agent.
     st.run_kwargs = run_kwargs = {
@@ -814,7 +816,13 @@ def _invoke_agent(
     try:
         from agent.notification_presentation import notification_turn, event_presentation_muted
         with notification_turn(agent, muted=event_presentation_muted("message.delta", sid), session_id=sid):
-            st.result = agent.run_conversation(run_message, **st.run_kwargs)
+            # This path has no per-message reply_expected: every submit is addressed to the agent.
+            arm_ack_obligation(agent, display_kind=display_kind, reply_expected=True, config=_load_cfg(),
+                               muted=bool(getattr(agent, "_mute_notification_reply", False)))
+            try:
+                st.result = agent.run_conversation(run_message, **st.run_kwargs)
+            finally:
+                disarm_ack_obligation(agent)
             # A held last line that never became a marker is part of the reply: deliver it.
             if hold is not None and (rest := hold.finish()) and not getattr(agent, "_mute_notification_reply", False):
                 _emit_delta(rest)

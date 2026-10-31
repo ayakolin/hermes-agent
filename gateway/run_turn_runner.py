@@ -1027,10 +1027,16 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 # marker that follows a written reply on that reply, before transform/persistence.
                 agent._silence_marker_needs_reply = not silence_allowed(
                     ctx.persist_user_display_kind, ctx.reply_expected)
+                # A dispatcher owes the user a first line on the same turns (agent/dispatcher_ack.py).
+                from agent.dispatcher_ack import arm_ack_obligation, disarm_ack_obligation
+                arm_ack_obligation(
+                    agent, display_kind=ctx.persist_user_display_kind, reply_expected=ctx.reply_expected,
+                    config=ctx.user_config, muted=ctx.mute_notification_reply or ctx.scheduled_heartbeat)
                 try:
                     result = agent.run_conversation(api_message, **kwargs)
                 finally:
                     agent._silence_marker_needs_reply = False
+                    disarm_ack_obligation(agent)
             if captured is not None:
                 incoming = max(0, (getattr(agent, 'session_prompt_tokens', 0) or 0) - before[0])
                 outgoing = max(0, (getattr(agent, 'session_completion_tokens', 0) or 0) - before[1])
@@ -1323,6 +1329,11 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             if tier is not _REQUEST_OPTION_MISSING:
                 runner._service_tier = tier
         runner._reasoning_config = reasoning_config
+        # Dispatcher sessions always show pre-tool text. ONE write, after the toolsets are final: the commentary
+        # consumer below and the delegation inline decision in _resolve_turn_agent both read this value.
+        from agent.dispatcher_ack import interim_forced
+        if interim_forced(ctx.enabled_toolsets, platform_key, ctx.user_config):
+            ctx.interim_assistant_messages_enabled = True
         stream_consumer, stream_delta_cb, interim_cb, want_interim = self._setup_stream_consumer(platform_key)
         turn_route = runner._resolve_turn_agent_config(ctx.message, model, runtime_kwargs)
         agent, reused_cached_agent = self._resolve_turn_agent(
