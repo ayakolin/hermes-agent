@@ -3010,8 +3010,19 @@ def _format_concise_process_notification(
     return text
 
 
+_COMPLETION_SILENCE_INSTRUCTION = (
+    "If this result changes nothing for the user — it is stale, you already reported it, or the task "
+    "it belonged to was cancelled — reply with exactly [SILENT] and nothing else, so this turn sends "
+    "no message. Otherwise report the result."
+)
+
+
 def _format_gateway_process_notification(evt: dict) -> str | None:
-    """Format a watch pattern event from completion_queue into a [IMPORTANT:] message."""
+    """Format a watch pattern event from completion_queue into a [IMPORTANT:] message.
+
+    Only the notice text produced HERE carries the silence instruction: the gateway strips a bare
+    marker for a machinery turn (``response_filters``), while a surface that does not strip it renders
+    the marker as text, so the shared formatter (CLI, Bot Mode) must never ask for one."""
     evt_type = evt.get("type", "completion")
     _sid = evt.get("session_id", "unknown")
     _cmd = evt.get("command", "unknown")
@@ -3035,9 +3046,19 @@ def _format_gateway_process_notification(evt: dict) -> str | None:
 
     if evt_type in ("async_delegation", "heartbeat"):
         from tools.process_registry_notifications import format_process_notification
-        return format_process_notification(evt)
+        return _with_completion_silence_instruction(format_process_notification(evt), evt)
 
     return None
+
+
+def _with_completion_silence_instruction(text: str | None, evt: dict) -> str | None:
+    """Append the silence instruction to a completion RESULT the gateway may drop on a bare marker. A
+    heartbeat is a liveness tick, not a result to judge; a failure notice is always reported."""
+    if not text or evt.get("type") != "async_delegation" or evt.get("task_failure_notice"):
+        return text
+    if text.endswith(_COMPLETION_SILENCE_INSTRUCTION):  # a retry of a notice already instrumented
+        return text
+    return f"{text}\n{_COMPLETION_SILENCE_INSTRUCTION}"
 
 
 # Weak ref to the active GatewayRunner; tools like send_message route through its live adapters.

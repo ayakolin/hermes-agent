@@ -4,6 +4,7 @@ Reuse the private native route envelope and FIFO, retaining nonhuman turn semant
 A producer ACK means committed input, not successful inference or outbound delivery.
 """
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 import logging
@@ -91,6 +92,11 @@ async def admit_process_notice(runner, authority, adapter, event, evt):
                                             'omitted': int(evt.get('omitted') or 0)}
         if evt.get('_replaces'):
             return await authority.admit_automation(adapter, event, identity, replaces=evt['_replaces'])
+    if evt.get('type') == 'async_delegation' and not evt.get('task_failure_notice'):
+        # The text is replayed verbatim to the model on every retry and after a restart, so it is a
+        # queued event of its own (rewriting the stored payload would break the fingerprint).
+        from gateway.run import _with_completion_silence_instruction
+        event = replace(event, text=_with_completion_silence_instruction(event.text, evt))
     if evt.get('type') != 'completion':
         return await authority.admit_automation(adapter, event, identity)
     async with _heartbeat_lock(runner):

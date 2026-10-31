@@ -747,12 +747,13 @@ def _invoke_agent(
     ``text`` is the turn's raw submit, matched against the row staged by prompt.submit."""
     agent = st.agent
     st.compression_count = getattr(getattr(agent, "context_compressor", None), "compression_count", None)
-    # Bot Chat mirrors gateway.stream_consumer: deltas are withheld while the reply could still
-    # be a bare silence marker ("NO"->"NO_REPLY") or its last line a closing one
-    # ("Paris.\n\nNO"), so a marker is never shown or spoken (the client keeps streamed text
-    # when message.complete is "").
-    from gateway.response_filters import SilenceMarkerStreamHold
-    hold = SilenceMarkerStreamHold() if _is_bot_mode_session(session) else None
+    # Bot Chat, and a machinery turn (whose reply the notice text may ask to silence), mirror
+    # gateway.stream_consumer: deltas are withheld while the reply could still be a bare silence marker
+    # ("NO"->"NO_REPLY") or its last line a closing one ("Paris.\n\nNO"), so a marker is never shown and
+    # then retracted (the client keeps streamed text when message.complete is "").
+    from gateway.response_filters import SilenceMarkerStreamHold, is_machinery_display_kind
+    hold = (SilenceMarkerStreamHold() if _is_bot_mode_session(session) or is_machinery_display_kind(display_kind)
+            else None)
 
     def _stream(delta):
         if getattr(agent, "_mute_notification_reply", False):
@@ -896,6 +897,17 @@ def _absorb_turn_result(
     return status_note
 
 
+def _machinery_silence_delivery_text(response: Any, *, successful: bool, display_kind: Any) -> Any:
+    """A bare silence marker stays out of the delivered text of a MACHINERY turn (a background completion,
+    watch notice or liveness tick), as the gateway drops it for those kinds. Classic CLI, Ink and Desktop
+    do not otherwise strip it, so the notice text asking for it (``process_registry_notifications``) is
+    only obeyed where this runs. A human turn keeps its marker: its acceptance is the gateway's call."""
+    from gateway.response_filters import is_machinery_display_kind, is_intentional_silence_response
+    if not successful or not is_machinery_display_kind(display_kind):
+        return response
+    return "" if is_intentional_silence_response(response) else response
+
+
 def _persisted_turn_receipt(st: _TurnRun, raw: Any, status: str) -> dict | None:
     """Committed row addresses of this turn (``agent.persisted_turn_receipt``); the pre-turn
     prefix is unchanged when every history row kept its committed row id."""
@@ -913,7 +925,9 @@ def _persisted_turn_receipt(st: _TurnRun, raw: Any, status: str) -> dict | None:
             committed_row_id(before) is not None and committed_row_id(before) == committed_row_id(after)))
 
 
-def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None, cols: int):
+def _complete_turn_payload(
+    session: dict, st: _TurnRun, status_note: str | None, cols: int, display_kind: str | None = None,
+):
     """``(payload, raw, status)`` for message.complete; retains/clears the inflight turn and
     settles the hosted-room terminal receipt."""
     result, agent = st.result, st.agent
@@ -934,6 +948,7 @@ def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None,
     receipt = _persisted_turn_receipt(st, raw, status)
     if _is_bot_mode_session(session):
         raw = _bot_mode_delivery_text(raw, successful=status == "complete")
+    raw = _machinery_silence_delivery_text(raw, successful=status == "complete", display_kind=display_kind)
     payload = {"text": raw, "usage": _get_usage(agent), "status": status}
     if receipt:
         payload["persisted_turn"] = receipt
@@ -1182,7 +1197,7 @@ def _run_prompt_submit(
                 display_metadata, turn_author, text)
             status_note = _absorb_turn_result(
                 sid, session, st, text, display_kind, display_metadata)
-            payload, raw, status = _complete_turn_payload(session, st, status_note, cols)
+            payload, raw, status = _complete_turn_payload(session, st, status_note, cols, display_kind)
             if status == "complete":
                 # Before message.complete: the desktop re-reads the sign-in offer on that event.
                 from tui_gateway.free_tier_task_done import note_task_done

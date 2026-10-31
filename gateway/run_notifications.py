@@ -1592,7 +1592,7 @@ class GatewayNotificationsMixin(
             f"[IMPORTANT: {len(blocks)} background subagent delegations "
             "completed for this session. Treat these results as one "
             "completion batch and send at most one consolidated user-facing "
-            "response. If a result does not change the current conclusion, absorb it silently.]"
+            "response.]"
         )
         consolidated = "\n\n".join([header, *blocks])
         if getattr(self, 'session_authority', None) is not None:

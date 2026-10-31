@@ -108,9 +108,21 @@ class GatewayConfigLoadersMixin:
             return None
         return _get_channel_override(config, platform, chat_id, thread_id=thread_id, parent_id=parent_id)
 
+    def _user_intervened(self, agent_result) -> bool:
+        """True when a human message reached this turn (interrupt, steer or redirect). The turn then also
+        answers that message, so it must not vanish on a silence marker: a queued completion folded into a
+        running turn sees the human text, and a bare marker would swallow the reply it was asked for."""
+        return isinstance(agent_result, dict) and bool(agent_result.get("user_intervened"))
+
     def _silence_allowed_for_source(self, source, display_kind, reply_expected, agent_result) -> bool:
-        """Evaluate existing exemptions before consulting the optional room permission."""
-        from gateway.response_filters import silence_allowed
+        """Evaluate existing exemptions before consulting the optional room permission.
+
+        A machinery turn keeps its established silence, unless a human message intervened: then it is judged
+        as a human turn (an unaddressed group chat, ``reply_expected`` False, still allows silence)."""
+        from gateway.response_filters import is_machinery_display_kind, silence_allowed
+        if is_machinery_display_kind(display_kind) and self._user_intervened(agent_result):
+            if reply_expected is not False:
+                return False
         return silence_allowed(display_kind, reply_expected) or silence_allowed(
             display_kind, reply_expected, allow_silence=self._room_allow_silence(source),
             agent_result=agent_result)
