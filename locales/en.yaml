@@ -754,6 +754,7 @@ gateway:
     behavior_steer_long: "Messages will be steered into the current run (after the next tool call)."
     behavior_interrupt_short: "interrupts current run"
     behavior_interrupt_long: "Messages will interrupt the current run while Hermes is busy."
+    dispatcher_note: "\n_This chat is a dispatcher session: a message sent while it works redirects or steers the running turn, or waits for the next one, and never interrupts it. The setting above does not change that (`dispatcher.busy.policy: inherit` restores it)._"
     status: "**Busy input mode: `{mode}`\nMessages while busy: _{behavior}_\nChange with `/busy queue`, `/busy steer`, or `/busy interrupt`."
     unknown_mode: "Unknown mode `{arg}`. Use `/busy queue`, `/busy steer`, or `/busy interrupt`."
     save_failed: "Busy input mode could not be saved to config. Mode unchanged."

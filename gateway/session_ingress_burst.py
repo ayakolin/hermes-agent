@@ -34,10 +34,16 @@ class _Burst:
     absorbed: list = field(default_factory=list)
 
 
-def _kind(adapter, event):
+def _kind(adapter, event, session_key):
     if event.message_type == MessageType.PHOTO and not event.internal:
         return 'photo'
-    return 'text' if adapter._is_queue_text_debounce_candidate(event) else None
+    if not adapter._is_queue_text_debounce_candidate(event):
+        return None
+    # A dispatcher session's text is never held for a merge window; the policy is per session, so a
+    # chat of the same profile that is not a dispatcher keeps the debounce.
+    runner = getattr(adapter, 'gateway_runner', None)
+    enabled = getattr(runner, '_dispatcher_busy_enabled', None)
+    return None if callable(enabled) and enabled(event.source, session_key) is True else 'text'
 
 
 def _state(adapter, name):
@@ -79,11 +85,14 @@ async def dispatch_busy_burst(adapter, event, session_key):
     queue-mode TEXT+TEXT burst first."""
     from gateway.platforms.base import merge_pending_message_event
     from gateway.session_ingress import dispatch_shared_busy
-    kind, bursts = _kind(adapter, event), _state(adapter, '_shared_bursts')
+    from gateway.session_receipt import follow_receipt, open_receipt
+    open_receipt(adapter, event, session_key)  # first, before any await or debounce: the mark is instant
+    kind, bursts = _kind(adapter, event, session_key), _state(adapter, '_shared_bursts')
     while (burst := bursts.get(session_key)) is not None:
-        if kind is not None and kind == _kind(adapter, burst.head) and adapter._can_merge_text_debounce_events(
+        if kind is not None and kind == _kind(adapter, burst.head, session_key) and adapter._can_merge_text_debounce_events(
                 burst.head, event):
             merge_pending_message_event({session_key: burst.head}, session_key, event, merge_text=kind == 'text')
+            follow_receipt(adapter, burst.head, event, session_key)
             burst.absorbed.append(event)
             burst.last_ts = time.monotonic()
             _arm(adapter, session_key, burst)
@@ -94,13 +103,29 @@ async def dispatch_busy_burst(adapter, event, session_key):
         await asyncio.wait({previous})  # one uncommitted burst per chat: the reader waits, as on main
         return await dispatch_busy_burst(adapter, event, session_key)  # a burst may have started meanwhile
     if kind is None:
-        if previous is not None:
-            await asyncio.wait({previous})
-        return await dispatch_shared_busy(adapter, event, session_key)
+        return await _dispatch_unmerged(adapter, event, session_key, previous)
     now = time.monotonic()
     burst = bursts[session_key] = _Burst(event, asyncio.get_running_loop().create_future(), now, now)
     _arm(adapter, session_key, burst)
     return await _accepted(adapter, burst, event)
+
+
+async def _dispatch_unmerged(adapter, event, session_key, previous):
+    """A busy input that merges with nothing, committed after the route's earlier commit. Once its
+    observer runs, that observer closes the receipt; an input that never got that far closes it here."""
+    from gateway.platforms.event import ProcessingOutcome
+    from gateway.session_ingress import dispatch_shared_busy
+    from gateway.session_receipt import close_receipt
+    try:
+        if previous is not None:
+            await asyncio.wait({previous})
+        return await dispatch_shared_busy(adapter, event, session_key)
+    except asyncio.CancelledError:
+        close_receipt(event, ProcessingOutcome.CANCELLED)
+        raise
+    except Exception:
+        close_receipt(event, ProcessingOutcome.FAILURE)
+        raise
 
 
 async def _accepted(adapter, burst, event):
@@ -152,10 +177,19 @@ async def _commit(adapter, session_key, burst, previous):
         # it ends once the row is committed, not when its FIFO position is fixed behind a capture.
         await dispatch_shared_busy(adapter, burst.head, session_key, durable=True)
     except Exception:
+        _close_burst_receipts(burst, 'failure')
         if not _serial(adapter):
             raise  # every absorbed caller sees it (``_settle``)
         # No caller waits on a serial reader's burst: log it as its receive loop would have.
         logger.exception('[%s] Busy burst for %s was not queued', adapter.name, session_key)
+
+
+def _close_burst_receipts(burst, how):
+    """End the receipts of a burst whose commit never reached an observer (an observer that ran closes
+    the head's, and so its followers', itself). Idempotent."""
+    from gateway.platforms.event import ProcessingOutcome
+    from gateway.session_receipt import close_receipt
+    close_receipt(burst.head, ProcessingOutcome.CANCELLED if how == 'cancelled' else ProcessingOutcome.FAILURE)
 
 
 def _settle(burst, task):
@@ -163,8 +197,10 @@ def _settle(burst, task):
     if burst.done.done():
         return
     if task.cancelled():
+        _close_burst_receipts(burst, 'cancelled')
         burst.done.cancel()
     elif task.exception() is not None:
+        _close_burst_receipts(burst, 'failure')
         burst.done.set_exception(task.exception())
     else:
         burst.done.set_result(None)
@@ -210,4 +246,5 @@ def discard_busy_burst(adapter, session_key):
     burst = adapter.__dict__.get('_shared_bursts', {}).pop(session_key, None)
     if burst is not None:
         burst.timer.cancel()
+        _close_burst_receipts(burst, 'cancelled')
         burst.done.done() or burst.done.set_result(None)

@@ -406,6 +406,7 @@ class GatewayAgentCacheMixin:
         from gateway.run import _CONVERSATION_SCOPED_STATE
         if not session_key:
             return
+        self._cancel_quick_lane(session_key)  # before clear() drops the lane's reference
         state = self._peek_session_state(session_key)
         if state is not None:
             state.conversation.clear()

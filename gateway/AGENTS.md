@@ -6,7 +6,7 @@ New platform: follow `gateway/platforms/ADDING_A_PLATFORM.md`.
 ## Shape
 
 `gateway/run.py` is the facade; phases live in `run_*.py` (startup, adapters, inbound, turn, busy,
-goals, notifications, shutdown, ...), sessions in `session*.py`, slash handlers in
+busy_dispatcher, goals, notifications, shutdown, ...), sessions in `session*.py`, slash handlers in
 `slash_commands_*.py` mixins, authorization in `authz_mixin.py`, adapters in `platforms/<name>.py`
 over `platforms/base.py`. `builtin_hooks/` is the extension point for always-registered gateway
 hooks (none shipped). The gateway reads user YAML **raw** (`run.py` + `config.py`), not through

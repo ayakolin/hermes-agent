@@ -383,6 +383,11 @@ class InterruptControlMixin:
         _ic_abort_active_request(self, "redirect_abort", "Failed to abort request for redirect")
         return True
 
+    def has_pending_steer(self) -> bool:
+        """Whether an accepted steer is still waiting for a drain (the gateway's stall watcher asks)."""
+        with _ic_lock(self, "_pending_steer_lock"):
+            return bool(_steer_parts(self))
+
     def _has_pending_redirect(self) -> bool:
         """Return whether an active-turn redirect is waiting to be applied."""
         with _ic_lock(self, "_pending_redirect_lock"):

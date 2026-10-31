@@ -1026,7 +1026,9 @@ class GatewaySlashCommandsMixin(
         if not arg or arg == "status":
             mode = session_busy_mode(self, live) if live is not None else self._effective_busy_input_mode(event.source)
             behavior = t(_BUSY_MODE_BEHAVIOR.get(mode, _BUSY_MODE_BEHAVIOR["interrupt"])[0])
-            return EphemeralReply(t("gateway.busy.status", mode=mode, behavior=behavior))
+            note = t("gateway.busy.dispatcher_note") if self._dispatcher_busy_enabled(
+                event.source, self._session_key_for_source(event.source)) else ""
+            return EphemeralReply(t("gateway.busy.status", mode=mode, behavior=behavior) + note)
         if arg not in _BUSY_MODE_BEHAVIOR:
             return EphemeralReply(t("gateway.busy.unknown_mode", arg=arg))
 

@@ -56,6 +56,11 @@ class ConversationState:
     # (channel_prompt, parent_chat_id) of the last non-internal turn; internal events reuse it
     channel_pin: Optional[tuple[Optional[str], Optional[str]]] = None
     vc_last: Optional[str] = None  # last voice-channel context delivered
+    # Dispatcher busy path (gateway/run_busy_dispatcher.py): the quick-lane handle (cancelled by the
+    # /stop and /new funnels BEFORE this clear drops the reference) and the "already answered" notes the
+    # next user turn carries as a sidecar.
+    quick_lane: Any = None
+    lane_notes: list[str] = field(default_factory=list)
 
     def clear(self) -> None:
         """Reset every field to its default, so new fields are cleared automatically."""
@@ -73,6 +78,10 @@ class PersistentState:
     # Legacy runner-level pending text (flushed on shutdown); not the adapter-level one.
     pending_command_text: Optional[str] = None
     run_generation: int = 0  # monotonic; NEVER reset (stale-run detection depends on it)
+    # Last dispatcher decision seen on a live or cached agent of this chat. The agent's own frozen flag
+    # is authoritative; this only answers for the window where no agent is visible (a turn still
+    # building its agent, the gap after /new), so it survives a conversation boundary on purpose.
+    dispatcher_seen: Optional[bool] = None
     # Consecutive hygiene compression failures (the in-agent ladder is unreachable: hygiene builds
     # a FRESH AIAgent per run).  Reset on success; process-local, mirrored to the DB by run.py.
     # Monotonic run-generation counter (#28686). NEVER reset: clearing it would break stale-run detection.

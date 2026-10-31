@@ -731,7 +731,9 @@ class GatewayTurnPrepareMixin:
         )
 
         # Stage the notes (one-shot; consumed in run_sync) AFTER the early-out so an aborted turn
-        # cannot leak them into the next turn.
+        # cannot leak them into the next turn. Staging overwrites, so the quick lane's notes join here.
+        if session_key and not event.internal:
+            turn_sidecar_notes.extend(self._drain_lane_notes(session_key))
         if turn_sidecar_notes and session_key:
             self._set_pending_turn_sidecar_notes(session_key, turn_sidecar_notes)
 

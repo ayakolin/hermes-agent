@@ -621,6 +621,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         and ``unknown`` rows are untouched; settled silently, no pause notice), then interrupts the
         claimed generation: a turn still constructing its agent latches the Stop for adopt_agent."""
         from gateway.session_authorities import active_authority
+        self._dispatcher_stop_funnel(_quick_key)  # quick lane and busy-path receipts end with the turn
         authority = active_authority(self)
         sid = authority.logical_owner(self.session_store.peek_session_id(_quick_key)) if authority else None
         if not sid or sid not in authority.sessions:
@@ -730,6 +731,8 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         must NOT also be admitted as its own turn; False when the caller should admit it (queue mode,
         a demotion, or an interrupt — the ended turn lets the FIFO run the follow-up next)."""
         from gateway.run import _AGENT_PENDING_SENTINEL
+        if self._dispatcher_busy_enabled(source, _quick_key):  # redirect -> steer -> queue, never interrupt
+            return await self._dispatcher_busy_preempt(event, source, _quick_key)
         mode = self._effective_busy_input_mode(source)
         state = self._peek_session_state(_quick_key)
         running_agent = state.turn.agent if state else None
@@ -759,6 +762,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         if _handled:
             return _result
 
+        if not self._draining and self._dispatcher_busy_enabled(source, _quick_key):
+            await self._dispatcher_busy_legacy(event, source, _quick_key)
+            return None
         effective_busy_input_mode = self._effective_busy_input_mode(source)
         if self._hm_busy_telegram_grace_queue(event, source, _quick_key, effective_busy_input_mode):
             return None

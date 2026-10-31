@@ -8,6 +8,7 @@ from dataclasses import replace
 from gateway.platforms.event import MessageEvent, ProcessingOutcome
 from gateway.session_envelope import restore_native
 from gateway.session_producer_lifecycle import close_producer_turn, producer_turn
+from gateway.session_receipt import close_receipt
 from hermes_state_runtime import RuntimeStoreError
 
 logger = logging.getLogger(__name__)
@@ -460,18 +461,22 @@ async def dispatch_shared_busy(adapter, event, session_key, *, durable=False):
         # Like the first message's lifecycle, this sender adopts the turn's crash marker and
         # releases it only once the reply is ledgered (the marker moves onto ``event``).
         event._turn_marker_handoff = getattr(adapter, 'gateway_runner', None) is not None
+        outcome = ProcessingOutcome.CANCELLED  # what a cancellation leaves; the paths below set the rest
         try:
             response = await adapter._message_handler(event)
             # The ledgered send releases the marker off the event it sends.
             _move_marker(event, delivery_event)
             delivery_event._turn_marker_handoff = event._turn_marker_handoff
-            await deliver_response(adapter, delivery_event, session_key, response)
+            delivered = await deliver_response(adapter, delivery_event, session_key, response)
+            outcome = ProcessingOutcome.SUCCESS if delivered else ProcessingOutcome.FAILURE
         except Exception as exc:
+            outcome = ProcessingOutcome.FAILURE
             if not accepted.done():
                 raise  # nothing was queued: the receive loop sees the failure as before
             logger.error('[%s] Queued busy follow-up failed: %s', adapter.name, exc, exc_info=True)
             await adapter._notify_turn_error(delivery_event, exc)
         finally:
+            close_receipt(event, outcome)  # the busy-path receipt (session_receipt), first close wins
             # Clears the marker if no ledgered send did, then wakes the drain's bounded wait,
             # which listens on the adopter (``event``).
             await adapter._release_turn_marker(delivery_event)

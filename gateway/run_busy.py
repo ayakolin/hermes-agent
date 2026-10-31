@@ -21,6 +21,7 @@ from agent.session_activity import format_iteration_progress
 from gateway.config import Platform
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent, MessageType
+from gateway.run_busy_dispatcher_ladder import DispatcherBusyLadderMixin
 from gateway.session import SessionSource
 from gateway.whatsapp_identity import canonical_whatsapp_identifier
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -101,7 +102,7 @@ def _same_chat_key_slots(
     return None
 
 
-class GatewayBusySessionMixin:
+class GatewayBusySessionMixin(DispatcherBusyLadderMixin):
     """Busy-session queueing, slot claims, slash dispatch tables, destructive-slash confirmation."""
 
     def _queue_during_drain_enabled(self, busy_input_mode: Optional[str] = None) -> bool:
@@ -971,6 +972,10 @@ class GatewayBusySessionMixin:
         await self._busy_interrupt_and_ack(event, session_key, adapter, _busy_state, running_agent, _steer)
         return True
 
+    @staticmethod
+    def _busy_acks_enabled() -> bool:
+        return os.environ.get("HERMES_GATEWAY_BUSY_ACK_ENABLED", "true").lower() == "true"
+
     async def _busy_interrupt_and_ack(self, event, session_key, adapter, _busy_state, running_agent, _steer) -> None:
         """Interrupt-mode abort (voice transcribed) and the busy ack, after the steer/redirect resolution.
         Shared by the in-process busy handler and the session authority's busy preempt."""
@@ -987,7 +992,7 @@ class GatewayBusySessionMixin:
 
         # Disabled ack: still process input. Checked before debounce so an undelivered ack never
         # stamps the "last ack" timestamp.
-        if os.environ.get("HERMES_GATEWAY_BUSY_ACK_ENABLED", "true").lower() != "true":
+        if not self._busy_acks_enabled():
             logger.debug("Busy ack suppressed for session %s", session_key)
             return  # input still processed, just no ack sent
 

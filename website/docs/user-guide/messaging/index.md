@@ -491,6 +491,25 @@ The first time you message a busy agent on any platform, Hermes appends a one-li
 
 If you find the busy acknowledgment noisy, set `display.busy_ack_enabled: false`. Input handling is unchanged; only the confirmation message is hidden.
 
+### Dispatcher sessions
+
+A chat that runs as a dispatcher (the main agent answers at once and hands long work to background executors) ignores `busy_input_mode` for its busy messages: a message sent while it works redirects the running turn, or is steered into it, or waits for the next turn, and never interrupts it. `/stop` still stops everything. Messages are not held for the merge window either; only a chunk that looks like part of a split long message is.
+
+- A turn that cannot take your message yet (context compression, a long tool call, a turn still starting) is answered by a short **quick reply** from a read-only copy of the conversation. It writes nothing to the transcript and calls no tools, and the main turn is told it was sent so it does not repeat it. `/stop` and `/new` cancel it.
+- Platforms that can react to a message mark yours at once (a reaction) and clear the mark when it has been handled. Where a message is queued and the platform cannot react, you get one short "queued" note instead.
+
+```yaml
+dispatcher:
+  busy:
+    policy: dispatch     # dispatch | inherit (inherit keeps busy_input_mode for dispatcher chats)
+    quick_lane: true     # answer from a read-only copy while the turn cannot take your message
+    stall_seconds: 4.0   # how long an accepted message may sit unread before the quick reply
+display:
+  dispatcher_receipt: auto   # auto | reaction | text | off; per platform under display.platforms.<name>
+```
+
+These are read once when the gateway (or a profile) starts, so `/busy` and later config edits do not change a running chat; a restart does.
+
 ## Clarify Questions (Multi-Select)
 
 When the agent uses the `clarify` tool to ask you a question, the gateway renders the choices as a numbered prompt (or native buttons on platforms that support them). Clarify supports **multi-select** questions too — the agent can let you pick several options at once:

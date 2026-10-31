@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+from gateway.run_busy_dispatcher import DispatcherBusyCfg, dispatcher_busy_from_config
+
 logger = logging.getLogger("gateway.run")  # log-record parity with gateway/run.py
 
 class GatewayRuntimeInitMixin:
@@ -22,6 +24,9 @@ class GatewayRuntimeInitMixin:
         self._busy_text_timing_by_profile: Dict[str, tuple[float, float]] = {}
         self._human_delay = self._human_delay_from_config(_load_gateway_config())
         self._human_delay_by_profile: Dict[str, Optional[tuple[int, int]]] = {}
+        # Dispatcher busy policy and receipt mode: read once here and at profile prepare, never by /busy.
+        self._dispatcher_busy = dispatcher_busy_from_config(_load_gateway_config())
+        self._dispatcher_busy_by_profile: Dict[str, DispatcherBusyCfg] = {}
         self._restart_drain_timeout = self._load_restart_drain_timeout()
         # Live launchd ``ExitTimeOut`` for this job (None when not launchd-owned). Read once at
         # boot — launchd fixes it at load — and applied only to signal-driven stops, which are the
