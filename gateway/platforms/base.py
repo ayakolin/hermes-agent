@@ -20,6 +20,7 @@ import weakref
 from abc import ABC, abstractmethod
 from hermes_dir_acl import make_user_dir, unusable_dir_remedy
 from gateway.platforms.base_log_safety import safe_url_for_log
+from gateway.platforms.base_busy_dispatch import BusyDispatchAdapterMixin
 
 from utils import normalize_proxy_url, unlink_files_older_than
 from agent.i18n import t
@@ -1805,7 +1806,7 @@ def _lazy_attr(obj: Any, name: str, factory: Callable[[], Any]) -> Any:
 _strip_media_directives = _strip_media_tag_directives
 
 
-class BasePlatformAdapter(ABC):
+class BasePlatformAdapter(BusyDispatchAdapterMixin, ABC):
     """Base class for platform adapters: connect/auth, receive, send, handle media."""
 
     # ``format_message`` renders ``` fences as real code blocks (tool-progress then sends a bare
@@ -2492,11 +2493,6 @@ class BasePlatformAdapter(ABC):
             prior_task.cancel()
         self._pending_text_batch_tasks[key] = asyncio.create_task(self._flush_text_batch(key))
 
-    def _text_batch_delay_for(self, pending: Optional[MessageEvent]) -> float:
-        """Quiet period before ``pending`` is dispatched; near-split chunks wait longer."""
-        last_len = getattr(pending, "_last_chunk_len", 0) if pending is not None else 0
-        return self._text_batch_split_delay_seconds if last_len >= self._SPLIT_THRESHOLD else self._text_batch_delay_seconds
-
     def _pop_text_batch(self, key: str) -> Optional[MessageEvent]:
         """Remove and return the pending batch for ``key`` (adapters with side tables override)."""
         return self._pending_text_batches.pop(key, None)
@@ -2523,7 +2519,7 @@ class BasePlatformAdapter(ABC):
         dispatch is shielded and the outer CancelledError swallowed."""
         current_task = asyncio.current_task()
         try:
-            await asyncio.sleep(self._text_batch_delay_for(self._pending_text_batches.get(key)))
+            await asyncio.sleep(self._text_batch_wait(key))
             owner = self._pending_text_batch_tasks.get(key)
             if owner is not None and owner is not current_task:
                 return

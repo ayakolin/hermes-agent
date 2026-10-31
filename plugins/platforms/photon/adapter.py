@@ -1427,14 +1427,13 @@ class PhotonAdapter(BasePlatformAdapter):
             return {"success": False, "error": "unreact failed (see gateway debug log)"}
         return {"success": True, "message_id": target}
 
+    def acknowledges_event(self, event: MessageEvent) -> bool:
+        return self._reactions_enabled() and bool(getattr(event.source, "chat_id", None) and getattr(event, "message_id", None))
+
     async def on_processing_start(self, event: MessageEvent) -> None:
         """Tapback 👀 on the triggering message while the agent works."""
-        if not self._reactions_enabled():
-            return
-        chat_id = getattr(event.source, "chat_id", None)
-        message_id = getattr(event, "message_id", None)
-        if chat_id and message_id:
-            await self._add_reaction(chat_id, message_id, "\U0001f440")
+        if self.acknowledges_event(event):
+            await self._add_reaction(event.source.chat_id, event.message_id, "\U0001f440")
 
     # base.on_processing_complete swaps 👀 for 👍/👎 (remove-then-add keeps the sidecar's
     # reaction-handle slot coherent); CANCELLED leaves it unreacted.

@@ -3271,15 +3271,14 @@ class SlackAdapter(BasePlatformAdapter):
         marker = self._workspace_message_marker(team_id, ts) if ts else None
         return (ts, team_id, marker) if ts and marker in self._reacting_message_ids else None
 
+    def acknowledges_event(self, event: MessageEvent) -> bool:
+        return self._reacting_target(event) is not None and bool(getattr(event.source, "chat_id", None))
+
     async def on_processing_start(self, event: MessageEvent) -> None:
         """Add an in-progress reaction when message processing begins."""
-        target = self._reacting_target(event)
-        if target is None:
-            return
-        ts, team_id, _marker = target
-        channel_id = getattr(event.source, "chat_id", None)
-        if channel_id:
-            await self._react(channel_id, ts, "eyes", team_id, remove=False)
+        if self.acknowledges_event(event):
+            ts, team_id, _marker = self._reacting_target(event)
+            await self._react(event.source.chat_id, ts, "eyes", team_id, remove=False)
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         """Swap the in-progress reaction for a final success/failure reaction."""

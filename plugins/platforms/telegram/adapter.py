@@ -6631,7 +6631,7 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
         the dispatch — teardown must be able to stop a flush from reaching a torn-down session."""
         await self._flush_buffered(
             self._pending_text_batches, self._pending_text_batch_tasks, key,
-            self._text_batch_delay_for(self._pending_text_batches.get(key)), "text",
+            self._text_batch_wait(key), "text",
             lambda ev: logger.info("[Telegram] Flushing text batch %s (%d chars)", key, len(ev.text or "")))
 
     # -- Photo batching --
@@ -7190,14 +7190,13 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
         """Clear all bot-set reactions."""
         return await self._set_reaction(chat_id, message_id, None)
 
+    def acknowledges_event(self, event: MessageEvent) -> bool:
+        return self._reactions_enabled() and bool(getattr(event.source, "chat_id", None) and getattr(event, "message_id", None))
+
     async def on_processing_start(self, event: MessageEvent) -> None:
         """Add an in-progress reaction when message processing begins."""
-        if not self._reactions_enabled():
-            return
-        chat_id = getattr(event.source, "chat_id", None)
-        message_id = getattr(event, "message_id", None)
-        if chat_id and message_id:
-            await self._set_reaction(chat_id, message_id, "\U0001f440")
+        if self.acknowledges_event(event):
+            await self._set_reaction(event.source.chat_id, event.message_id, "\U0001f440")
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         """Swap the in-progress reaction for a final success/failure reaction (set_message_reaction

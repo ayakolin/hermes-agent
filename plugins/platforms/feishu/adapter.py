@@ -2592,24 +2592,24 @@ class FeishuAdapter(BasePlatformAdapter):
         data = await self._reaction_call("Remove", message_id, reaction_id, _build, self._client.im.v1.message_reaction.delete)
         return data is not None
 
+    def acknowledges_event(self, event: MessageEvent) -> bool:
+        return self._reactions_enabled() and bool(event.message_id)
+
     async def on_processing_start(self, event: MessageEvent) -> None:
-        message_id = event.message_id
-        if not self._reactions_enabled() or not message_id or message_id in self._pending_processing_reactions:
+        if not self.acknowledges_event(event) or event.message_id in self._pending_processing_reactions:
             return
-        reaction_id = await self._add_reaction(message_id, _FEISHU_REACTION_IN_PROGRESS)
-        if reaction_id:
+        if reaction_id := await self._add_reaction(event.message_id, _FEISHU_REACTION_IN_PROGRESS):
             cache = self._pending_processing_reactions
-            cache[message_id] = reaction_id
-            cache.move_to_end(message_id)
+            cache[event.message_id] = reaction_id
+            cache.move_to_end(event.message_id)
             while len(cache) > _FEISHU_PROCESSING_REACTION_CACHE_SIZE:
                 cache.popitem(last=False)
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         message_id = event.message_id
-        if not self._reactions_enabled() or not message_id:
+        if not self.acknowledges_event(event):
             return
-        start_reaction_id = self._pending_processing_reactions.get(message_id)
-        if start_reaction_id:
+        if start_reaction_id := self._pending_processing_reactions.get(message_id):
             if not await self._remove_reaction(message_id, start_reaction_id):
                 # Don't stack a second badge on a Typing we couldn't remove (UI would read as both
                 # "working" and "done/failed"); keep the handle so LRU eventually evicts it.

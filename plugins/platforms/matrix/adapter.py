@@ -2473,12 +2473,12 @@ class MatrixAdapter(BasePlatformAdapter):
         self._reaction_redaction_tasks.add(task)
         task.add_done_callback(self._reaction_redaction_tasks.discard)
 
+    def acknowledges_event(self, event: MessageEvent) -> bool:
+        return bool(self._reactions_enabled and event.message_id and event.source.chat_id)
+
     async def on_processing_start(self, event: MessageEvent) -> None:
-        msg_id, room_id = event.message_id, event.source.chat_id
-        if self._reactions_enabled and msg_id and room_id:
-            reaction_event_id = await self._send_reaction(room_id, msg_id, "\U0001f440")
-            if reaction_event_id:
-                self._pending_reactions[(room_id, msg_id)] = reaction_event_id
+        if self.acknowledges_event(event) and (rid := await self._send_reaction(event.source.chat_id, event.message_id, "\U0001f440")):
+            self._pending_reactions[(event.source.chat_id, event.message_id)] = rid
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         msg_id, room_id = event.message_id, event.source.chat_id

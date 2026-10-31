@@ -960,10 +960,13 @@ class SignalAdapter(BasePlatformAdapter):
         sender = getattr(getattr(event, "source", None), "user_id", None) if event is not None else None
         return not (sender and "*" not in self.dm_allow_from and sender not in self.dm_allow_from)
 
+    def acknowledges_event(self, event: MessageEvent) -> bool:
+        return self._reactions_enabled(event) and self._extract_reaction_target(event) is not None
+
     async def on_processing_start(self, event: MessageEvent) -> None:
         """React with 👀 when processing begins."""
-        if self._reactions_enabled(event) and (target := self._extract_reaction_target(event)):
-            await self.send_reaction(event.source.chat_id, "👀", *target)
+        if self.acknowledges_event(event):
+            await self.send_reaction(event.source.chat_id, "👀", *self._extract_reaction_target(event))
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         """Swap 👀 for ✅/❌; on CANCELLED the 👀 stays to keep reflecting "in progress" (matches Telegram)."""
