@@ -369,8 +369,6 @@ class MemoryManager:
         call keeps running on its daemon thread; _PREFETCH_GATE decides whether later turns call again."""
         if provider.name == "builtin":
             return provider.prefetch(query, session_id=session_id)
-        if deadline is not None and time.monotonic() >= deadline:
-            return ""  # an earlier provider used the caller's whole budget: do not start a call nobody will read
 
         result_box: dict[str, Any] = {}
 
