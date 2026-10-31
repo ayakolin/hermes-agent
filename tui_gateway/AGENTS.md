@@ -105,7 +105,10 @@ children keep running (#114909). Control (`steer` / `interrupt` / `tail`) stays 
 exact session record and transport. Child authority is resolved at RPC time against the owning session's
 LIVE transport slot, so every authenticated reattach path (prompt.submit, queued drain,
 resume, activate, viewer failover) carries it with no registry bookkeeping — never add a
-per-record transport sync at an attach site; foreign or retired generations remain uncontrollable. `last_tool` is the last started tool, not an in-flight
+per-record transport sync at an attach site; foreign or retired generations remain uncontrollable. A
+dispatcher session's task has no child while it waits for a background slot: its roster row carries
+`phase` / `queue_position` / `queued_at` instead of a run, and `subagent.interrupt` reaches it through the
+record's `cancel_fn` (a task that never started is cancelled, not interrupted). `last_tool` is the last started tool, not an in-flight
 indicator. Async completion units are not agents and lack exact generation authority;
 `delegations` remains an empty array for wire compatibility. No dispatch context,
 results, callbacks, or routing keys are sent. Clients hydrate from this snapshot

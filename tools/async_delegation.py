@@ -875,6 +875,8 @@ def _dispatch_admitted(
         future = executor.submit(propagate_context_to_thread(functools.partial(_run_record, delegation_id, runner, is_batch)))
         future.add_done_callback(lambda _: retirement.release())
     except Exception as exc:  # pragma: no cover — pool submit failure is rare
+        # Logged with its traceback: a lost dispatch must not read as a routine rejection in the log.
+        logger.error("Async delegation%s %s could not be scheduled: %s", label, delegation_id, exc, exc_info=True)
         retirement.release()
         with _records_lock:
             _records.pop(delegation_id, None)

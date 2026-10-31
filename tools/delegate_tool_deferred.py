@@ -76,7 +76,7 @@ class _UnitControl:
     """Construction control of one unit: stop what has not started and find its children once they exist. ``cancel``
     is set before anything is signalled, so a build waiting for the construction lock leaves instead of starting."""
 
-    def __init__(self, unit: UnitSpec, call: "_DeferredCall") -> None:
+    def __init__(self, unit: UnitSpec, call: _DeferredCall) -> None:
         self.unit, self.call = unit, call
         self.cancel = threading.Event()
         self.lock = threading.Lock()
@@ -231,7 +231,9 @@ class _DeferredCall:
                     row = dict(_records[unit.delegation_id])
                 persist_dispatch(row)
             except Exception:
-                logger.error("deferred dispatch %s: ledger write failed; it runs in memory only", unit.delegation_id)
+                # Boundary: a failed ledger write must not cost the run, and the unit still delivers in memory.
+                logger.error("deferred dispatch %s: ledger write failed; it runs in memory only", unit.delegation_id,
+                             exc_info=True)
             finally:
                 self.persisted[unit.delegation_id].set()
         with _quiet("Durable record pruning failed"):

@@ -212,7 +212,7 @@ def test_a_stop_before_the_child_exists_cancels_the_queued_task(env, monkeypatch
     monkeypatch.setattr(dt, "_build_child_agent", _stub_builder(monkeypatch, gate=gate))
     monkeypatch.setattr(dt, "_parent_live_home", lambda _parent: None)
     parent = _Parent("dispatcher-c")
-    first = _dispatch(parent, "occupies the slot")
+    _dispatch(parent, "occupies the slot")
     queued = _dispatch(parent, "waits in line")
     sid = queued["subagent_ids"][0]
 
@@ -246,8 +246,6 @@ def test_construction_failure_is_that_tasks_error(env, monkeypatch):
     event = _final_event(env, payload["delegation_id"])
     assert event is not None, f"no completion event for a construction failure; steps={getattr(parent, 'steps', None)}"
     entries = event.get("results") or []
-    rec = async_delegation._records.get(payload["delegation_id"]) or {}
-    detail = {k: v for k, v in rec.items() if k.startswith("_") or k in ("status", "phase", "is_batch")}
     assert entries and entries[0]["failure_reason"] == "construction_failed", (entries, event.get("status"), event.get("error"))
     assert "boom" in (entries[0].get("error") or "")
     assert _wait(lambda: sid not in _active_subagents), "the placeholder of a failed task was left behind"
@@ -274,7 +272,7 @@ def test_a_unit_promoted_by_another_thread_keeps_the_admitting_thread_callbacks(
     seen: list = []
     monkeypatch.setattr(dt, "_build_child_agent", _stub_builder(monkeypatch, seen=seen))
     monkeypatch.setattr(dt, "_parent_live_home", lambda _parent: None)
-    parent = _Parent("dispatcher-e")
+    _Parent("dispatcher-e")
     set_approval_callback(lambda *_a, **_k: "B")
     try:
         wrapped = propagate_context_to_thread(lambda: seen.append(_get_approval_callback()))

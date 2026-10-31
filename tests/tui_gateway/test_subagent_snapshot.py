@@ -132,7 +132,7 @@ def test_queued_task_without_a_child_is_listed_and_stoppable(runtime):
     """A dispatcher task waits without a child: the roster still shows it (phase, place in line) and Stop reaches it."""
     from tools.delegate_tool_registry import discard_placeholder, register_placeholder
 
-    server, owner, transport, call = runtime
+    _server, owner, transport, call = runtime
     cancelled = []
     register_placeholder(
         subagent_id="sa-queued", parent_id=None, depth=0, goal="waiting for a slot", delegation_id="deleg_q",

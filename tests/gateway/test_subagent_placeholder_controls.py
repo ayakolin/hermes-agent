@@ -43,7 +43,6 @@ def desktop(monkeypatch):
 
 def _queued(cancelled: list):
     """A task whose record is reachable by lineage (the roster rule), exactly as a queued dispatch publishes it."""
-    parent = _parent_agent()
     register_placeholder(
         subagent_id="sa-q", parent_id=None, depth=0, goal="waiting", delegation_id="deleg_q", model="m",
         started_at=1000.0, status="queued", phase="queued", queue_position=1, tool_count=0, last_tool=None,

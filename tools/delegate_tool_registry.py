@@ -159,8 +159,9 @@ def interrupt_record(record: dict[str, Any], reason: str) -> bool:
             return bool(request_hard_interrupt(agent, reason))
         if callable(cancel_fn):
             return bool(cancel_fn())  # a placeholder's stopper takes no reason; it reports through the unit
-    except Exception as exc:
-        logger.debug("interrupt of %s failed: %s", record.get("subagent_id"), exc)
+    except Exception:
+        # Boundary: a third-party child or a stopped unit's own teardown may raise; the caller gets False either way.
+        logger.debug("interrupt of %s failed", record.get("subagent_id"), exc_info=True)
     return False
 
 def _subagent_transport_matches(record, transport) -> bool:
@@ -220,8 +221,9 @@ def _steer_locked(record: dict[str, Any], subagent_id: str, text: str) -> bool:
         return True
     try:
         return bool(agent.steer(text))
-    except Exception as exc:
-        logger.debug("steer_subagent(%s) failed: %s", subagent_id, exc)
+    except Exception:
+        # Boundary: a third-party child's steer may raise; the caller is told the text was not queued.
+        logger.debug("steer_subagent(%s) failed", subagent_id, exc_info=True)
         return False
 
 def steer_authorized_record(subagent_id: str, snapshot: dict[str, Any], text: str) -> bool:
