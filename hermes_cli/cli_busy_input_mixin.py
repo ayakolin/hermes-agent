@@ -1,6 +1,6 @@
 """The classic CLI's busy-input router: what Enter, Tab, the external editor and /steer do while a turn runs.
 
-Every entry goes through one ordered path (``submit_busy``). A dispatcher session's text goes through a
+Every entry goes through one ordered path (``_busy_submit``). A dispatcher session's text goes through a
 serial worker so the ladder's RPCs never run on the prompt_toolkit key thread (the gateway answers a
 socket's requests one at a time, so a slow correction would freeze Enter), and the worker keeps submission
 order: text submitted while it is busy joins its FIFO, and the worker decides course from the state captured
