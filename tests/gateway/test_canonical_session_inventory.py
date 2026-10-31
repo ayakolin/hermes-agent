@@ -91,7 +91,9 @@ async def test_cli_surface_snapshot_carries_main_cli_toolsets_and_startup_warnin
     home = tmp_path / 'home'
     home.mkdir()
     (home / 'config.yaml').write_text(
-        'model: {default: gpt-5.4, provider: custom, base_url: "http://127.0.0.1:9/v1"}\n')
+        'model: {default: gpt-5.4, provider: custom, base_url: "http://127.0.0.1:9/v1"}\n'
+        # A classic CLI session: a dispatcher session runs the posture toolset, not the profile's selection.
+        'dispatcher: {enabled: false}\n')
     monkeypatch.setenv('HERMES_HOME', str(home))
     monkeypatch.setattr(run, '_hermes_home', home)
     monkeypatch.setattr(banner, '_available_skills_cache', None)
