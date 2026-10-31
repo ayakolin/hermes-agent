@@ -52,6 +52,21 @@ in `assistant_msg["reasoning"]`.
 `INLINE_TOOL_EXECUTORS` table in `agent/inline_tool_executors.py` before `handle_function_call()`.
 Adding one: register in that table (no `if name == ...` chain); `tools/todo_tool.py` is the pattern.
 
+## Dispatcher mode (`agent/dispatcher_session.py`)
+
+A dispatcher session answers at once and hands long work to background executors. The decision is made
+ONCE where the session is created and frozen — `LocalSessionPolicy.dispatcher` for local sessions, the
+`sessions.model_config['dispatcher']` marker for chat platforms and the legacy tui_gateway (surface
+details: `website/docs/developer-guide/dispatcher-mode.md`) — and read
+through `agent_is_dispatcher(agent)` everywhere else; nothing toggles it mid-conversation (prompt cache).
+It picks three things: the `dispatcher` posture toolset (`toolsets.py`, never in `_HERMES_CORE_TOOLS`), the
+background `delegate_task` variant, and `DISPATCHER_GUIDANCE` in the stable tier (in place of
+`TASK_COMPLETION_GUIDANCE`, with the coding brief skipped). `agent_init._load_tools` freezes
+`agent._dispatcher_session` before the first tool build; `dispatcher_applies` holds the creation-time
+predicate. A side agent (`/bg`, `/btw`, `/refine`, a review fork, a delegated child) is never a dispatcher.
+Not to be confused with `delegation_context.is_dispatcher_owned_worker_context`, which is the Kanban
+dispatcher. User docs: `website/docs/user-guide/features/dispatcher-mode.md`.
+
 **Dispatcher reply obligation** (`agent/dispatcher_ack.py`): a dispatcher session owes the user a first
 line on every human turn. A surface arms `_ack_obligation` before `run_conversation` (like
 `_silence_marker_needs_reply`); the turn then carries a one-shot reminder on its first tool result

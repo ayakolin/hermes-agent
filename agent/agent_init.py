@@ -1036,34 +1036,8 @@ def _load_tools(agent, enabled_toolsets, disabled_toolsets):
     agent._kanban_worker_guidance = (
         KANBAN_GUIDANCE if owned_kanban_task() and "kanban_show" in agent.valid_tool_names else ""
     )
-    if agent.quiet_mode:
-        return
-    if agent.tools:
-        print(f"🛠️  Loaded {len(agent.tools)} tools: {', '.join(sorted(agent.valid_tool_names))}")
-        if enabled_toolsets:
-            print(f"   ✅ Enabled toolsets: {', '.join(enabled_toolsets)}")
-        if disabled_toolsets:
-            print(f"   ❌ Disabled toolsets: {', '.join(disabled_toolsets)}")
-        import model_tools
-        requirements = model_tools.check_toolset_requirements()
-        missing_reqs = [name for name, available in requirements.items() if not available]
-        if missing_reqs:
-            agent._safe_print(f"⚠️  Some tools may not work due to missing requirements: {missing_reqs}", diagnostic=True)
-    else:
-        print("🛠️  No tools loaded (all tools filtered out or unavailable)")
-    if agent.save_trajectories:
-        print("📝 Trajectory saving enabled")
-    if agent.ephemeral_system_prompt:
-        prompt_preview = agent.ephemeral_system_prompt[:60] + "..." if len(agent.ephemeral_system_prompt) > 60 else agent.ephemeral_system_prompt
-        print(f"🔒 Ephemeral system prompt: '{prompt_preview}' (not saved to trajectories)")
-    if agent._use_prompt_caching:
-        if agent._use_native_cache_layout and agent.provider == "anthropic":
-            source = "native Anthropic"
-        elif agent._use_native_cache_layout:
-            source = "Anthropic-compatible endpoint"
-        else:
-            source = "Claude via OpenRouter"
-        print(f"💾 Prompt caching: ENABLED ({source}, {agent._cache_ttl} TTL)")
+    from agent.agent_init_banner import announce_tool_snapshot
+    announce_tool_snapshot(agent, enabled_toolsets, disabled_toolsets)
 
 
 def _publish_session_id(session_id: str) -> None:

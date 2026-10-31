@@ -672,9 +672,12 @@ delegation:
 - **`inline`:** every gateway session joins its children inside the turn.
 - **`background`** (alias `async`): every gateway session keeps background delegation.
 
+Dispatch follows the variant the model actually sees, so schema and behaviour cannot disagree. A
+**dispatcher session** always uses the background variant, whatever `delegation.gateway_mode` says; see
+[Dispatcher mode](./dispatcher-mode.md).
+
 An inline session's `delegate_task` says results return in the call and leaves out the
-live-control parameters (`action` list/steer/stop, `subagent_id`, `message`), the same
-schema as a one-shot run. While it waits, the typing indicator stays on and the turn
+live-control parameters (`action` list/steer/stop, `subagent_id`, `message`), the sameschema as a one-shot run. While it waits, the typing indicator stays on and the turn
 behaves like any long tool call. `/stop` stops the children, and so does a follow-up
 message under the default `busy_input_mode: interrupt` (each child returns an interrupted
 result with its partial output); under `queue` the follow-up waits for the turn.

@@ -4,6 +4,15 @@ Applies on top of the root `AGENTS.md`. The TUI fully replaces the classic promp
 activate with `hermes --tui` or `HERMES_TUI=1`. `tui_gateway` is ALSO the backend the Desktop app
 and the dashboard `/chat` talk to — changes here have three consumers.
 
+## Dispatcher mode in a TUI/Desktop session
+
+A session whose conversation is a dispatcher (`agent/AGENTS.md` § Dispatcher mode) is built by
+`agent_factory._session_enabled_toolsets`: the dispatcher selection plus the client surface's own toolsets,
+else the classic `_load_enabled_toolsets`. The decision is the session-row marker
+(`session_dispatcher_toolsets`), and only the `tui`/`desktop` surfaces, an unpinned selection and a
+non-onboarding chat are eligible. A side agent (`agent_callbacks._background_agent_kwargs`, `/bg`) keeps the
+classic selection: it does the work the dispatcher hands off.
+
 ## Process model
 
 ```

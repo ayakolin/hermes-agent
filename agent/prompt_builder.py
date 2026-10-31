@@ -412,6 +412,8 @@ DISPATCHER_GUIDANCE = (
     "instead of starting over.\n"
     "- After dispatching, say in one line what is under way and end your turn. Do not poll, wait or narrate "
     "progress; the result arrives as a new message.\n"
+    "- Say that line BEFORE the delegate_task call, and write nothing after it: your turn ends as soon as an "
+    "accepted dispatch comes back, so text placed after the call is never sent.\n"
     "- When a result arrives, tell the user what matters in your own words. Check anything it claims about the "
     "outside world before you state it as done. If the user has moved on, mention the result in a sentence.\n"
     "- The user's newest message comes first. Answer it, and leave running work alone unless they ask you to "
