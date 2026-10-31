@@ -74,6 +74,12 @@ const diffSegmentBody = (msg: Msg): null | string => {
 
 const hasDetails = (msg: Msg): boolean => Boolean(msg.thinking || msg.tools?.length || msg.toolTokens)
 
+// A child that outlived the turn that spawned it (a background executor) keeps its row: the live roster
+// (`useAgentRoster`) shows it from the snapshot, and this turn's rows are only the ones it finished.
+const LIVE_SUBAGENT_STATUSES: ReadonlySet<string> = new Set(['queued', 'running'])
+const keepsLiveSubagents = (rows: SubagentProgress[]): SubagentProgress[] =>
+  rows.filter(row => LIVE_SUBAGENT_STATUSES.has(row.status))
+
 const isTodoStatus = (status: unknown): status is TodoItem['status'] =>
   status === 'pending' || status === 'in_progress' || status === 'completed' || status === 'cancelled'
 
@@ -357,14 +363,17 @@ class TurnController {
       this.segmentMessages = []
     }
 
-    patchTurnState({
+    patchTurnState(state => ({
+      ...state,
       streamPendingTools: opts.keepTurnArchive ? this.pendingSegmentTools : [],
       streamSegments: opts.keepTurnArchive ? this.segmentMessages : [],
       streaming: '',
-      subagents: [],
+      // Still-running children keep their rows across the turn boundary (a background executor started by
+      // this turn keeps streaming); a finished one is archived by `recordMessageComplete` and drops here.
+      subagents: keepsLiveSubagents(state.subagents),
       tools: [],
       turnTrail: []
-    })
+    }))
     patchUiState({ busy: false, compacting: false })
     resetFlowOverlays()
   }
@@ -766,7 +775,7 @@ class TurnController {
     // Archive the turn's spawn tree to history BEFORE idle() drops subagents
     // from turnState.  Lets /replay and the overlay's history nav pull up
     // finished fan-outs without a round-trip to disk.
-    const finishedSubagents = getTurnState().subagents
+    const finishedSubagents = getTurnState().subagents.filter(row => !LIVE_SUBAGENT_STATUSES.has(row.status))
     const sessionId = getUiState().sid
 
     if (finishedSubagents.length > 0) {
@@ -1100,7 +1109,27 @@ class TurnController {
     // parked archive into this one.
     this.segmentMessages = []
     this.pendingSegmentTools = []
-    patchTurnState({ activity: [], outcome: '', streamPendingTools: [], streamSegments: [], subagents: [], toolTokens: 0, tools: [], turnTrail: [] })
+    patchTurnState(state => ({
+      ...state,
+      activity: [],
+      outcome: '',
+      streamPendingTools: [],
+      streamSegments: [],
+      subagents: keepsLiveSubagents(state.subagents),
+      toolTokens: 0,
+      tools: [],
+      turnTrail: []
+    }))
+  }
+
+  /** A live roster snapshot: drop retained rows the snapshot no longer lists. A `subagent.complete` lost to a
+   *  replay gap or a gateway restart would otherwise leave its running row on screen for good. */
+  reconcileSubagents(liveIds: ReadonlySet<string>) {
+    patchTurnState(state => {
+      const next = state.subagents.filter(row => !LIVE_SUBAGENT_STATUSES.has(row.status) || liveIds.has(row.id))
+
+      return next.length === state.subagents.length ? state : { ...state, subagents: next }
+    })
   }
 
   upsertSubagent(

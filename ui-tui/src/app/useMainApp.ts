@@ -46,7 +46,7 @@ import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { onUserWidgets } from '../sdk/userWidgets.js'
 import type { Msg, PanelSection } from '../types.js'
 
-import { applyAgentSnapshot } from './agentRoster.js'
+import { applyAgentSnapshot, applyRosterSnapshot } from './agentRoster.js'
 import { clarifySettledRows } from './clarifyTranscript.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createServerRequestHandler } from './createServerRequestHandler.js'
@@ -714,7 +714,7 @@ export function useMainApp(gw: GatewayClient) {
           const result = asRpcResult<SubagentListResponse>(raw)
 
           if (!stopped && result && getUiState().sid === sid) {
-            applyAgentSnapshot(sid, result)
+            applyRosterSnapshot(sid, result)
           }
         })
         .catch(() => {})

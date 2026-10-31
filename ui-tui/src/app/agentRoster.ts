@@ -4,9 +4,12 @@ import { useMemo } from 'react'
 
 import type { SubagentListResponse } from '../gatewayTypes.js'
 import type { SubagentProgress } from '../types.js'
+import type { GatewayClient } from '../gatewayClient.js'
 
+import { asRpcResult } from '../lib/rpc.js'
+import { turnController } from './turnController.js'
 import { useTurnSelector } from './turnStore.js'
-import { $uiState } from './uiStore.js'
+import { $uiState, getUiState } from './uiStore.js'
 
 // Session-local presentation only; never persisted to config.
 export const $agentDockCollapsed = atom(false)
@@ -20,6 +23,47 @@ export function applyAgentSnapshot(sid: string | null, data: SubagentListRespons
   if (previous.sid !== sid || JSON.stringify(previous.data) !== JSON.stringify(data)) {
     $agentSnapshot.set({ sid, data })
   }
+}
+
+/** One roster snapshot reached the app: merge it into the view and reconcile the turn's retained rows
+ *  against it (a running row the owner no longer lists is gone — its completion was lost). */
+export function applyRosterSnapshot(sid: string | null, data: SubagentListResponse = EMPTY) {
+  applyAgentSnapshot(sid, data)
+  turnController.reconcileSubagents(new Set((data.subagents ?? []).map(row => row.subagent_id)))
+}
+
+const ROSTER_PUSH_DEBOUNCE_MS = 250
+let rosterPushTimer: null | ReturnType<typeof setTimeout> = null
+
+/** Re-read `subagent.list` now (coalesced): a pushed `subagent.*` event or a moved active count means the
+ *  roster changed, and a spawn between two 1.5 s polls would otherwise stay invisible until the next one.
+ *  The poll stays as the fallback (a dropped frame, a gateway restart). */
+export function refreshAgentRoster(gw: GatewayClient, sid: null | string) {
+  if (!sid) {
+    return
+  }
+
+  if (rosterPushTimer !== null) {
+    clearTimeout(rosterPushTimer)
+  }
+
+  rosterPushTimer = setTimeout(() => {
+    rosterPushTimer = null
+
+    if (getUiState().sid !== sid) {
+      return // the user moved on: another session's roster is not this one
+    }
+
+    gw.request<SubagentListResponse>('subagent.list', { session_id: sid })
+      .then(raw => {
+        const result = asRpcResult<SubagentListResponse>(raw)
+
+        if (result && getUiState().sid === sid) {
+          applyAgentSnapshot(sid, result)
+        }
+      })
+      .catch(() => {})
+  }, ROSTER_PUSH_DEBOUNCE_MS)
 }
 
 export function mergeAgentRoster(events: SubagentProgress[], data: SubagentListResponse): SubagentProgress[] {

@@ -286,9 +286,11 @@ export async function hydrateFullConfig(
 ): Promise<ConfigFullResponse | null> {
   const params = scope ? { session_id: scope.sid } : {}
 
+  // The owner resolves a session's busy mode (a dispatcher session runs the redirect-first ladder and keeps
+  // its own /busy override), so the session-scoped value wins over `display.busy_input_mode` on both transports.
   const [cfg, busy] = await Promise.all([
     quietRpc<ConfigFullResponse>(gw, 'config.get', { key: 'full', ...params }),
-    gw.isCanonical && scope ? quietRpc(gw, 'config.get', { key: 'busy', ...params }) : null
+    scope ? quietRpc(gw, 'config.get', { key: 'busy', ...params }) : null
   ])
 
   if (scope && !scope.isCurrent()) {
@@ -297,7 +299,7 @@ export async function hydrateFullConfig(
 
   applyDisplay(cfg, setBell, setVoiceRecordKey, setBellOnPrompt, !gw.isCanonical)
 
-  if (gw.isCanonical && BUSY_MODES.has(busy?.value)) {
+  if (BUSY_MODES.has(busy?.value)) {
     patchUiState({ busyInputMode: busy!.value })
   }
 

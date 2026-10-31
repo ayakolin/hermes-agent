@@ -18,6 +18,8 @@ import type {
   SessionMostRecentResponse
 } from '../gatewayTypes.js'
 import { t } from '../i18n/runtime.js'
+import { refreshAgentRoster } from './agentRoster.js'
+import { claimCardRow } from './cardRows.js'
 import { billingDialogCopy, usageLimitDialog } from '../lib/billingDialog.js'
 import { type ImageAttachment, stageImagePath } from '../lib/imageAttachments.js'
 import { isTodoDone } from '../lib/liveProgress.js'
@@ -1050,6 +1052,30 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     }, 0)
   }
 
+  // The notification card an admitted automation turn's `message.start` carries (`display_kind` /
+  // `display_text`, `gateway.session_automation.admission_display`). Null for an ordinary typed turn, and for
+  // an admission whose card this process already drew (a replayed start must not repeat the row).
+  const admissionCard = (ev: AnyGatewayEvent) => {
+    const payload = ev.payload as { display_kind?: unknown; display_text?: unknown } | undefined
+    const kind = payload?.display_kind
+    const display = payload?.display_text
+    const id = ev.admission_id
+
+    if (typeof kind !== 'string' || !kind || typeof display !== 'string' || !display.trim() || !id) {
+      return null
+    }
+
+    if (!claimCardRow(ev.session_id ?? '', id)) {
+      return null
+    }
+
+    return { display: display.trim() }
+  }
+
+  // A child that starts or finishes off-turn (a background executor) moves no `busy` flag: re-read the
+  // roster at once instead of waiting for the 1.5 s poll (debounced in `refreshAgentRoster`).
+  const pushRosterRefresh = () => refreshAgentRoster(ctx.gateway.gw, getUiState().sid)
+
   // Terminal statuses are never overwritten by late-arriving live events —
   // otherwise a stale `subagent.start` / `spawn_requested` can clobber a
   // terminal state from complete (failed/interrupted/timeout/error).
@@ -1286,11 +1312,21 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         return
 
-      case 'message.start':
+      case 'message.start': {
         resetAgentsNudgeTurnState()
         turnController.startMessage()
 
+        // A gateway-admitted automation turn (a background completion) carries its card here; the reply that
+        // follows answers it. Without the row the user sees only that reply, never what drove it. The card's
+        // id keeps a replayed start from drawing it twice.
+        const card = admissionCard(ev)
+
+        if (card) {
+          appendMessage({ kind: 'event', role: 'system', text: card.display })
+        }
+
         return
+      }
       case 'status.update': {
         const p = ev.payload
 
@@ -1692,6 +1728,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         }
 
         turnController.upsertSubagent(ev.payload, c => (isTerminalStatus(c.status) ? {} : { status: 'queued' }))
+        pushRosterRefresh()
 
         // First sign of delegation this turn → nudge toward /agents.
         maybeNudgeAgents()
@@ -1712,6 +1749,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         }
 
         turnController.upsertSubagent(ev.payload, c => (isTerminalStatus(c.status) ? {} : { status: 'running' }))
+        pushRosterRefresh()
 
         // `subagent.start` is the first delegation event the TUI reliably
         // receives (the delegate callback drops `spawn_requested` in the

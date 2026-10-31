@@ -1,6 +1,9 @@
 import { expect, it } from 'vitest'
 
 import { $agentSnapshot, applyAgentSnapshot, mergeAgentRoster } from '../app/agentRoster.js'
+import { resetUiState } from '../app/uiStore.js'
+import { getTurnState, resetTurnState } from '../app/turnStore.js'
+import { turnController } from '../app/turnController.js'
 import { shouldPassThroughToGlobalHandler } from '../components/textInput.js'
 import type { SubagentProgress } from '../types.js'
 
@@ -51,4 +54,51 @@ it('merges one row per actual child and does not notify unchanged snapshots', ()
   expect(mergeAgentRoster([], data).map(s => s.id)).toEqual(['child'])
   applyAgentSnapshot('next')
   expect($agentSnapshot.get().data.subagents).toEqual([])
+})
+
+const row = (id: string, status: string) => ({
+  goal: 'inspect',
+  status,
+  subagent_id: id,
+  task_count: 1,
+  task_index: 0
+})
+
+
+it('keeps a still-running child row across idle() and startMessage(), and archives only finished rows', () => {
+  resetUiState()
+  resetTurnState()
+  turnController.fullReset()
+  turnController.upsertSubagent(row('child', 'running') as any, c => ({ status: c.status }))
+  turnController.idle()
+  expect(getTurnState().subagents.map(row => row.id)).toEqual(['child'])
+  const archived: string[] = []
+  turnController.persistSpawnTree = async rows => {
+    archived.push(...rows.map(row => row.id))
+  }
+  turnController.startMessage()
+  expect(getTurnState().subagents.map(row => row.id)).toEqual(['child'])
+  expect(archived).toEqual([])
+})
+
+it('drops a retained running row the owner no longer lists', () => {
+  resetUiState()
+  resetTurnState()
+  turnController.fullReset()
+  turnController.upsertSubagent(row('child', 'running') as any, c => ({ status: c.status }))
+  turnController.idle()
+  turnController.reconcileSubagents(new Set())
+  expect(getTurnState().subagents).toEqual([])
+})
+
+it('a late subagent.complete still terminates a retained row', () => {
+  resetUiState()
+  resetTurnState()
+  turnController.fullReset()
+  turnController.upsertSubagent(row('child', 'running') as any, c => ({ status: c.status }))
+  turnController.idle()
+  turnController.upsertSubagent(row('child', 'completed') as any, c => ({
+    status: c.status === 'running' ? 'completed' : c.status
+  }))
+  expect(getTurnState().subagents[0]?.status).toBe('completed')
 })
