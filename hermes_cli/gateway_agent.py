@@ -29,6 +29,36 @@ _POLL = 0.1
 # ``steer()`` / ``redirect()``'s reply when the owner consumed the text as a typed voice stop (TUI-26):
 # truthy, so a caller that only asks "taken?" never re-queues it.
 VOICE_STOPPED = "voice_stopped"
+# ``redirect()``'s reply when a dispatcher session took the text as a steer (its redirect had no model
+# request to cancel): truthy like ``True``, but the turn's ask is NOT re-anchored on it.
+STEERED = "steered"
+
+
+class _NotTaken:
+    """Base of the falsy ``steer()`` / ``redirect()`` answers: the text was not taken."""
+
+    def __init__(self, reason):
+        self.reason = reason
+
+    def __bool__(self):
+        return False
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.reason!r})"
+
+
+class Refusal(_NotTaken):
+    """The owner answered, or nothing was sent. ``undelivered`` (default) means no agent saw the text, so
+    queuing it as the next prompt cannot duplicate it; ``False`` is a live agent that declined it."""
+
+    def __init__(self, reason, *, undelivered=True):
+        super().__init__(reason)
+        self.undelivered = undelivered
+
+
+class Unknown(_NotTaken):
+    """Sent, outcome not known (a lost answer, a Codex steer that may already hold the text): the caller
+    reports it and neither re-queues nor turns it into an interrupt."""
 
 _RESULT_DEFAULTS = {
     "final_response": "", "failed": False, "partial": False, "error": None, "failure_reason": None,
@@ -603,22 +633,40 @@ class GatewayAgent:
         self.interrupt(message)
 
     def _correct(self, verb, text):
-        """-> ``True`` (accepted), ``False`` (not taken: the caller queues the text), or
-        ``"voice_stopped"`` (TUI-26: the owner took a bare stop phrase as the end of this LOCAL
-        session's voice chat; the text is consumed and reaches no turn, so it is never re-queued)."""
+        """-> a truthy answer (the text was taken), or a falsy one saying what became of it:
+
+        * ``True`` / ``STEERED`` (a dispatcher redirect the owner took as a steer) / ``"voice_stopped"``
+          (TUI-26: the owner took a bare stop phrase as the end of this LOCAL session's voice chat; consumed,
+          never re-queued);
+        * :class:`Refusal` ``undelivered``: the owner confirms no agent saw the text (``delivered: False``, or
+          it refused before delivering): safe to queue as the next prompt;
+        * :class:`Refusal` not ``undelivered``: a live agent declined it (the classic hard-interrupt path may
+          still apply);
+        * :class:`Unknown`: sent, outcome not known (a lost answer, a text a Codex steer may already hold):
+          never re-queued, never turned into an interrupt."""
         generation = self._generation
         if generation is None:
-            return False
+            return Refusal("no_active_turn")
         try:
             result = self.connection.call(f"session.{verb}", session_id=self.session_id, text=text,
                                           execution_generation=generation)
-        except GatewayClientError:
-            return False
-        if (result or {}).get("voice_stopped") is True:
+        except GatewayRPCError as exc:
+            return Refusal(str(exc))  # the owner answered and refused: nothing was delivered
+        except GatewayClientError as exc:
+            return Refusal(NOT_SENT) if str(exc) == NOT_SENT else Unknown(str(exc))
+        result = result or {}
+        if result.get("voice_stopped") is True:
             from agent.i18n import t
             self._emit_print(t("cli.voice.stop_phrase_typed"))
             return VOICE_STOPPED
-        return (result or {}).get("status") in {"queued", "redirected"}
+        if result.get("status") in {"queued", "redirected"}:
+            return STEERED if result.get("disposition") == "steered" and verb == "redirect" else True
+        reason = result.get("reason") or ""
+        if result.get("delivered") is False:
+            return Refusal(reason or "undelivered")
+        # A plain rejection: the owner names a reason when it is a dispatcher ladder that could not tell
+        # whether the text landed; a classic live agent that just declined it names none.
+        return Unknown(reason) if reason else Refusal("declined", undelivered=False)
 
     def _compress_context(self, messages, system_message=None, *, approx_tokens=None, focus_topic=None,
                           force=True, verbatim_tail=None, **_kw):
