@@ -1935,7 +1935,8 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
     ):
         if hasattr(_cc, _attr):
             setattr(_cc, _attr, _value)
-    if cs.prepare_ahead and isinstance(_cc, ContextCompressor):
+    from agent.dispatcher_latency import wants_prepared_compaction
+    if wants_prepared_compaction(agent, cs.prepare_ahead) and isinstance(_cc, ContextCompressor):
         from agent.prepared_compaction import PreparedCompaction
         _cc.prepared_compaction = PreparedCompaction()
     agent.compression_checkpoint_required = cs.checkpoint_required
@@ -2242,6 +2243,9 @@ def init_agent(
         _agent_cfg = {}
 
     _apply_display_config(agent, _agent_cfg, platform)
+    # dispatcher.latency.* are read once here (a cached gateway agent keeps its values until rebuilt).
+    from agent.dispatcher_latency import freeze_dispatcher_latency
+    freeze_dispatcher_latency(agent, _agent_cfg)
     _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=memory_manager)
     _apply_agent_section(agent, _agent_cfg)
     cs = _parse_compression_config(agent, _agent_cfg)

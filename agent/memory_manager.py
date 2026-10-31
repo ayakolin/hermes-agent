@@ -233,6 +233,9 @@ class MemoryManager:
         # The profile ``initialize_all`` bound the providers to; tool calls must come from it (#140058).
         self._bound_scope: Optional[dict[str, Any]] = None
         self._tool_call_keywords_cache: dict[int, Optional[frozenset[str]]] = {}
+        # The bounded turn start (begin_turn_bounded): one in-flight tick per provider name, so a tick the
+        # caller stopped waiting for is never overlapped by the next turn's.
+        self._tick_threads: dict[str, threading.Thread] = {}
 
     def _each_provider(self, label: str, call: Callable[[MemoryProvider], Any], *, level: int = logging.DEBUG,
                        providers: Optional[list[MemoryProvider]] = None, exc_info: bool = False) -> list[Any]:
@@ -343,22 +346,31 @@ class MemoryManager:
     # providers get just the user's instruction (None for a bare invocation).
     _strip_skill_scaffolding = staticmethod(extract_user_instruction_from_skill_message)
 
-    def prefetch_all(self, query: str, *, session_id: str = "") -> str:
-        """Merge non-empty prefetch context from all providers (failures are non-fatal)."""
+    def prefetch_all(self, query: str, *, session_id: str = "", deadline: Optional[float] = None) -> str:
+        """Merge non-empty prefetch context from all providers (failures are non-fatal).
+
+        ``deadline`` (``time.monotonic()``) is the caller's own cut-off, earlier than a provider's timeout:
+        the caller stops waiting then and the result is dropped. The call itself keeps its real timeout in
+        ``_PREFETCH_GATE``, so a slow-but-healthy provider is not counted as stuck for the caller's haste."""
         clean_query = self._strip_skill_scaffolding(query)
         if not clean_query or not self._owner_allows("prefetch"):
             return ""
         clean_query = _redact_for_provider(clean_query)
         parts = self._each_provider(
-            "prefetch failed (non-fatal)", lambda p: self._prefetch_provider(p, clean_query, session_id=session_id),
+            "prefetch failed (non-fatal)",
+            lambda p: self._prefetch_provider(p, clean_query, session_id=session_id, deadline=deadline),
         )
         return "\n\n".join(p for p in parts if p and p.strip())
 
-    def _prefetch_provider(self, provider: MemoryProvider, query: str, *, session_id: str = "") -> str:
+    def _prefetch_provider(
+        self, provider: MemoryProvider, query: str, *, session_id: str = "", deadline: Optional[float] = None,
+    ) -> str:
         """Run one provider's prefetch; external providers are bounded by a timeout. A stuck external
         call keeps running on its daemon thread; _PREFETCH_GATE decides whether later turns call again."""
         if provider.name == "builtin":
             return provider.prefetch(query, session_id=session_id)
+        if deadline is not None and time.monotonic() >= deadline:
+            return ""  # an earlier provider used the caller's whole budget: do not start a call nobody will read
 
         result_box: dict[str, Any] = {}
 
@@ -385,12 +397,16 @@ class MemoryManager:
             self._PREFETCH_GATE.leave(key, thread, ok=False)
             raise
 
-        thread.join(self._external_prefetch_timeout)
+        wait = self._external_prefetch_timeout
+        if deadline is not None:
+            wait = min(wait, max(0.0, deadline - time.monotonic()))
+        thread.join(wait)
         if thread.is_alive():
-            logger.warning(
-                "Memory provider '%s' prefetch timed out after %.1fs; the call keeps running in the "
-                "background (later turns may skip it while the provider stays stuck)", provider.name,
-                self._external_prefetch_timeout,
+            # Only a call that outlasted its own timeout is a provider fault; one cut off by the caller's
+            # deadline is routine on a bounded turn.
+            (logger.warning if wait >= self._external_prefetch_timeout else logger.info)(
+                "Memory provider '%s' prefetch not ready after %.1fs; the call keeps running in the "
+                "background (later turns may skip it while the provider stays stuck)", provider.name, wait,
             )
             return ""
 
@@ -610,18 +626,35 @@ class MemoryManager:
         record_provider_memory_call(provider.name, tool_name, args, result)
         return result
 
+    @staticmethod
+    def _tick_provider(p: MemoryProvider, turn_number: int, message: str, kwargs: dict[str, Any]) -> None:
+        # A provider written before the author kwargs declares (turn_number, message) only; it still gets its tick.
+        params = _signature_params(p.on_turn_start)
+        accepted = kwargs if params is None or _has_var_kwargs(params) else {k: v for k, v in kwargs.items() if k in params}
+        p.on_turn_start(turn_number, message, **accepted)
+
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
         if not self._owner_allows("on_turn_start"):
             return
         message = _redact_for_provider(message)
+        self._each_provider("on_turn_start failed", lambda p: self._tick_provider(p, turn_number, message, kwargs))
 
-        def _tick(p: MemoryProvider) -> None:
-            # A provider written before the author kwargs declares (turn_number, message) only; it still gets its tick.
-            params = _signature_params(p.on_turn_start)
-            accepted = kwargs if params is None or _has_var_kwargs(params) else {k: v for k, v in kwargs.items() if k in params}
-            p.on_turn_start(turn_number, message, **accepted)
+    def begin_turn_bounded(self, turn_number: int, message: str, *, budget_s: float, recall: bool,
+                           session_id: str = "", **kwargs) -> str:
+        """``on_turn_start`` then ``prefetch_all`` inside one wall-clock budget; returns the recall text.
+        The first-token path of a dispatcher session. Behaviour in ``agent/memory_manager_bounded.py``."""
+        from agent.memory_manager_bounded import begin_turn_bounded
 
-        self._each_provider("on_turn_start failed", _tick)
+        return begin_turn_bounded(
+            self, turn_number, message, budget_s=budget_s, recall=recall, session_id=session_id, **kwargs
+        )
+
+    def overrides_pre_compress(self) -> bool:
+        """Whether a provider supplies summary context (overrides ``on_pre_compress``), which makes a summary
+        prepared in the background useless (``agent/dispatcher_latency.py``)."""
+        from agent.memory_manager_bounded import overrides_hook
+
+        return any(overrides_hook(p, "on_pre_compress") for p in self._providers)
 
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:
         if not self._owner_allows("on_session_end"):

@@ -507,13 +507,21 @@ class StreamingConfig:
         """The ``streaming.enabled`` master switch (``transport: off`` also disables)."""
         return bool(self.enabled) and self.transport != "off"
 
-    def enabled_for(self, platform_override: Any) -> bool:
+    def enabled_for(self, platform_override: Any, *, dispatcher_stream: bool = False) -> bool:
         """Effective streaming for one platform.
 
         ``platform_override`` is ``display.platforms.<plat>.streaming`` (``None`` = follow global).
         A per-platform value can only narrow the global switch, never enable streaming on its own.
+
+        ``dispatcher_stream`` (a dispatcher session whose ``dispatcher.latency.stream_deltas`` is on) lets an
+        EXPLICIT per-platform ``True`` stream even though the global switch is off, so the first words reach
+        the user while the turn is still running. A platform that follows the global (``None``), an explicit
+        ``False`` and ``transport: off`` all stay off. Turning it off: ``dispatcher.latency.stream_deltas:
+        false``, or the platform's own ``streaming: false``.
         """
-        return self.globally_enabled and (platform_override is None or bool(platform_override))
+        if self.globally_enabled:
+            return platform_override is None or bool(platform_override)
+        return dispatcher_stream and self.transport != "off" and platform_override is True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

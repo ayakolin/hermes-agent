@@ -233,7 +233,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
 
     # ── stream consumer / interim commentary wiring ─────────────────────────────────────────
 
-    def _setup_stream_consumer(self, platform_key):
+    def _setup_stream_consumer(self, platform_key, *, dispatcher_stream=False):
         ctx = self._ctx
         if ctx.mute_notification_reply:
             return None, None, None, False
@@ -251,7 +251,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # no drafts, edits, native stream or commentary bubbles; the rewrite goes out as one plain
         # final while the typing indicator runs (the agent also withholds every delta).
         held = stream_held()
-        want_stream_deltas = not held and not ctx.scheduled_heartbeat and scfg.enabled_for(plat_streaming)
+        want_stream_deltas = (not held and not ctx.scheduled_heartbeat
+                              and scfg.enabled_for(plat_streaming, dispatcher_stream=dispatcher_stream))
         # A finite (`-z`, `chat -q`) viewer prints only the terminal reply, like the classic quiet
         # CLI that never wired commentary. Commentary it cannot see must not be recorded as a
         # delivery, or a final that arrives as commentary (codex app-server) suppresses the reply.
@@ -1330,15 +1331,21 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 runner._service_tier = tier
         runner._reasoning_config = reasoning_config
         # Dispatcher sessions always show pre-tool text. ONE write, after the toolsets are final: the commentary
-        # consumer below and the delegation inline decision in _resolve_turn_agent both read this value.
+        # consumer and the delegation inline decision in _resolve_turn_agent both read this value.
         from agent.dispatcher_ack import interim_forced
         if interim_forced(ctx.enabled_toolsets, platform_key, ctx.user_config):
             ctx.interim_assistant_messages_enabled = True
-        stream_consumer, stream_delta_cb, interim_cb, want_interim = self._setup_stream_consumer(platform_key)
         turn_route = runner._resolve_turn_agent_config(ctx.message, model, runtime_kwargs)
         agent, reused_cached_agent = self._resolve_turn_agent(
             turn_route, platform_key, combined_ephemeral, max_iterations, reasoning_config, pr,
         )
+        # After the agent exists: whether it is a dispatcher session is frozen on it (a cached agent keeps
+        # its own), and the consumer's streaming decision needs that. Nothing between here and the old
+        # position read the consumer; its holder is polled for up to 10s by the stream task.
+        from agent.dispatcher_latency import dispatcher_streams_deltas
+
+        stream_consumer, stream_delta_cb, interim_cb, want_interim = self._setup_stream_consumer(
+            platform_key, dispatcher_stream=dispatcher_streams_deltas(agent))
         if pending_fallback_notice:
             # Reuse the in-agent one-shot notice so the pre-agent provider switch is user-visible too.
             agent._pending_fallback_notice = pending_fallback_notice

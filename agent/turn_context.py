@@ -812,20 +812,25 @@ def _collect_pre_llm_call_context(
     if getattr(agent, "_persist_disabled", False):
         return ""
     try:
+        from agent.dispatcher_latency import pre_llm_call_budget_s
         from hermes_cli.lifecycle import invoke_hook as _invoke_hook
-        _pre_results = _invoke_hook(
-            "pre_llm_call",
-            session_id=agent.session_id,
-            task_id=effective_task_id,
-            turn_id=turn_id,
-            user_message=original_user_message,
-            conversation_history=list(messages),
-            is_first_turn=(not bool(conversation_history)),
-            model=agent.model,
-            platform=getattr(agent, "platform", None) or "",
-            parent_session_id=getattr(agent, "_parent_session_id", None) or "",
-            sender_id=getattr(agent, "_user_id", None) or "",
-        )
+        from hermes_cli.plugins_dispatch import hook_budget
+
+        # Dispatcher session: observer and plugins share one budget (hook_budget); other sessions: unbudgeted.
+        with hook_budget("pre_llm_call", pre_llm_call_budget_s(agent)):
+            _pre_results = _invoke_hook(
+                "pre_llm_call",
+                session_id=agent.session_id,
+                task_id=effective_task_id,
+                turn_id=turn_id,
+                user_message=original_user_message,
+                conversation_history=list(messages),
+                is_first_turn=(not bool(conversation_history)),
+                model=agent.model,
+                platform=getattr(agent, "platform", None) or "",
+                parent_session_id=getattr(agent, "_parent_session_id", None) or "",
+                sender_id=getattr(agent, "_user_id", None) or "",
+            )
         try:
             # Spill oversized per-hook context to disk so a runaway plugin can't inflate every subsequent
             # turn's prompt. Ported from openai/codex PR #21069 ("Spill large hook outputs from context").
@@ -923,16 +928,27 @@ def _memory_turn_start_and_prefetch(
     _query = _memory_query_text(original_user_message)
     # The author rides along so a provider can attribute THIS turn, not whoever opened the session.
     _author = turn_author if isinstance(turn_author, dict) else {}
-    with suppress(Exception):
-        agent._memory_manager.on_turn_start(
-            agent._user_turn_count, _query,
-            author_id=_author.get("id") or None, author_name=_author.get("name") or None,
-            author_is_bot=bool(_author.get("is_bot")),
-        )
+    _author_kwargs = dict(
+        author_id=_author.get("id") or None, author_name=_author.get("name") or None,
+        author_is_bot=bool(_author.get("is_bot")),
+    )
+    from agent.dispatcher_latency import memory_budget_s, skip_recall_for_turn
+
+    _recall = not is_trivial_prompt(_query) and not skip_recall_for_turn(agent)
     ext_prefetch_cache = ""
-    with suppress(Exception):
-        if not is_trivial_prompt(_query):
-            ext_prefetch_cache = agent._memory_manager.prefetch_all(_query, session_id=agent.session_id) or ""
+    if (_budget := memory_budget_s(agent)) > 0:
+        # Dispatcher session: tick and recall share one budget (agent/memory_manager_bounded.py).
+        with suppress(Exception):
+            ext_prefetch_cache = agent._memory_manager.begin_turn_bounded(
+                agent._user_turn_count, _query, budget_s=_budget, recall=_recall,
+                session_id=agent.session_id, **_author_kwargs,
+            ) or ""
+    else:
+        with suppress(Exception):
+            agent._memory_manager.on_turn_start(agent._user_turn_count, _query, **_author_kwargs)
+        with suppress(Exception):
+            if _recall:
+                ext_prefetch_cache = agent._memory_manager.prefetch_all(_query, session_id=agent.session_id) or ""
     # Deterministic recall indicator via _emit_status so the model can't silently
     # drop injected memory.
     if ext_prefetch_cache:
@@ -1064,6 +1080,8 @@ def build_turn_context(
     # Reset first: a cached gateway agent must never carry the previous turn's bot author into a human turn.
     turn_author = parse_turn_author(turn_author)
     agent._turn_author = turn_author
+    # The persisted kind of this turn's user row, for the machine-text recall skip (agent/dispatcher_latency.py).
+    agent._turn_display_kind = persist_user_display_kind
 
     # Recover a rotated session before binding log/turn ids or copying client history so
     # everything in this turn belongs to the canonical child.

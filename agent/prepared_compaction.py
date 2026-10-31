@@ -267,6 +267,19 @@ class PreparedCompaction:
                 dropped.compress_start, dropped.compress_end, reason, "" if entry is not None else " (pass running)",
             )
 
+    def state(self) -> str:
+        """``ready`` (a completed candidate is held), ``running`` (a pass is writing one), else ``none``.
+
+        A read for callers that must not consume or cancel anything, and cheap: it does not check the
+        candidate against the transcript (``take()`` does that at the splice), so ``ready`` can still
+        turn out to be a miss. The dispatcher's deferral (``agent/dispatcher_latency.py``) defers only on
+        ``running``."""
+        with self._lock:
+            if self._entry is not None:
+                return "ready"
+            pending = self._pending
+            return "running" if pending is not None and not pending.cancelled.is_set() else "none"
+
     def stop_for_provider_context(self) -> None:
         """A memory provider supplied summary context: stop preparing summaries that would be discarded."""
         if not self._needs_provider_context:

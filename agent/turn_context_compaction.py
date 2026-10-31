@@ -19,6 +19,7 @@ from agent.conversation_compression import (
     IDLE_COMPACTION_STATUS_TEMPLATE, PREFLIGHT_COMPRESSION_STATUS_TEMPLATE,
     compression_skipped_due_to_lock, conversation_history_after_compression,
 )
+from agent.dispatcher_latency import should_defer_compaction
 
 logger = logging.getLogger("agent.turn_context")
 
@@ -227,6 +228,21 @@ def _codex_native_auto_compaction(agent: Any) -> bool:
     )
 
 
+def _still_compress_after_window_growth(agent: Any, compressor: Any, tokens: int) -> bool:
+    """Managed local runtime: growing the window beats compressing (ladder order; same seam as
+    _maybe_grow_local_window in the loop). Returns whether compression is still wanted."""
+    try:
+        from agent.conversation_loop import _maybe_grow_local_window
+
+        grown = _maybe_grow_local_window(agent, compressor, tokens)
+    except Exception:
+        grown = None
+    if not grown:
+        return True
+    _apply_grown_window(agent, compressor, grown)
+    return compressor.should_compress(tokens)
+
+
 def _preflight_compression(
     agent: Any, out: CompactionOutcome, system_message: Optional[str], user_message: Any,
     effective_task_id: str,
@@ -312,18 +328,12 @@ def _preflight_compression(
         if not _should_compress_now:
             _compress_block_reason = _blocked_compress_reason(_compressor, _preflight_tokens)
     if _should_compress_now:
-        # Managed local runtime: growing the window beats compressing (ladder order;
-        # same seam as _maybe_grow_local_window in the loop).
-        try:
-            from agent.conversation_loop import _maybe_grow_local_window
-
-            _grown = _maybe_grow_local_window(agent, _compressor, _preflight_tokens)
-        except Exception:
-            _grown = None
-        if _grown:
-            _apply_grown_window(agent, _compressor, _grown)
-            _should_compress_now = _compressor.should_compress(_preflight_tokens)
-    if _should_compress_now:
+        _should_compress_now = _still_compress_after_window_growth(agent, _compressor, _preflight_tokens)
+    # Dispatcher session: the one place the turn-start decision defers. It follows the LAST
+    # should_compress above (the grown-window re-check when the window grew, the first one otherwise),
+    # so it covers both paths; a deferred turn re-arms nothing and runs no engine maintenance.
+    _deferred = _should_compress_now and should_defer_compaction(agent, _preflight_tokens)
+    if _should_compress_now and not _deferred:
         _run_preflight_passes(
             agent, out, _compressor, _preflight_tokens, system_message, effective_task_id
         )
@@ -333,7 +343,7 @@ def _preflight_compression(
         agent._warn_context_overflow_blocked(
             _compress_block_reason, _preflight_tokens, _compressor.threshold_tokens
         )
-    else:
+    elif not _deferred:
         # Sub-threshold and unblocked — re-arm the overflow warning.
         _clear_overflow_warn(agent)
         # Engine maintenance only when NO skip-branch fired: cooldown, deferred

@@ -19,6 +19,7 @@ from agent.conversation_compression import (
     compression_skipped_due_to_lock, context_compression_timed_out,
     conversation_history_after_compression, ensure_compression_feasibility_checked,
 )
+from agent.dispatcher_latency import should_defer_compaction
 from agent.turn_context import _review_fork_first_request_pending
 from agent.turn_context_compaction import (
     _apply_grown_window, _blocked_compress_reason, _clear_overflow_warn, _refund_api_call,
@@ -100,6 +101,9 @@ def run_preflight_compression(
         and (not defer_preflight(request_pressure_tokens) or provider_overflow_preflight)
         and not _compression_cooldown
         and compressor.should_compress(request_pressure_tokens)
+        # Dispatcher session: wait for the summary a background pass is writing (never on a
+        # provider-proven overflow, which must compress now).
+        and (provider_overflow_preflight or not should_defer_compaction(agent, request_pressure_tokens))
     ):
         # Managed local runtime: grow the context window before compressing (last
         # resort). Only for a llamacpp provider at the supervised base_url.
@@ -296,14 +300,19 @@ def compress_after_tool_results(
 
     if agent.compression_enabled and compression_attempts < max_compression_attempts:
         ensure_compression_feasibility_checked(agent, _real_tokens)
-    if (
+    _wants_compression = (
         agent.compression_enabled
         and compression_attempts < max_compression_attempts
         and not bool(
             getattr(_compressor, "awaiting_real_usage_after_compression", False)
         )
         and _compressor.should_compress(_real_tokens)
-    ):
+    )
+    # Dispatcher session: wait for the summary a background pass is writing. A deferred turn is neither
+    # a compaction nor a blocked one, so it skips the blocked-overflow warning and the proactive prune
+    # below (both would rewrite or warn about the very transcript compaction is about to replace).
+    _deferred = _wants_compression and should_defer_compaction(agent, _real_tokens)
+    if _wants_compression and not _deferred:
         compression_attempts += 1
         # Compression is running: reset blocked-overflow warning dedup so a
         # future blocked turn can warn again.
@@ -358,7 +367,7 @@ def compress_after_tool_results(
                 turn_exit_reason = "compaction_handoff_not_actionable"
                 return _verdict(True)
             current_turn_user_idx = _reanchor(agent, messages, user_message)
-    elif agent.compression_enabled:
+    elif agent.compression_enabled and not _deferred:
         # Over threshold but compression blocked (cooldown/anti-thrash): deduped
         # warning so context can't silently overflow. ``attempts_spent`` names the
         # attempts_exhausted lockout when the engine says RUN but the per-turn

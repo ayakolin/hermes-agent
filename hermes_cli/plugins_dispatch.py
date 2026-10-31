@@ -7,6 +7,7 @@ the origin (tests patch it there) and is looked up lazily.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import copy
 import inspect
@@ -184,6 +185,42 @@ _HOOK_CALLBACK_TIMEOUT_SECS = 30.0
 _MAX_HOOK_CALLBACK_TIMEOUT_SECS = 600.0
 _HOOK_SKIPPED = object()  # returned by _run_hook_callback_bounded on skip/timeout
 
+# (hook name, monotonic deadline) of the active ``hook_budget``; read by the callback loop of that hook only.
+_hook_deadline: contextvars.ContextVar[Optional[tuple[str, float]]] = contextvars.ContextVar(
+    "hermes_hook_deadline", default=None)
+
+
+@contextlib.contextmanager
+def hook_budget(hook_name: str, seconds: float):
+    """Bound ONE hook's whole dispatch (first-party observer plus every plugin callback) to ``seconds``.
+
+    Inside the block each plugin callback of ``hook_name`` gets ``min(plugins.hook_callback_timeout,
+    time left)``, even when the configured timeout is 0 (unbounded), and callbacks that find the budget
+    spent are skipped. A callback cut off by the budget is abandoned like any timed-out one but does NOT
+    start the 60s suppression: it was only slower than this turn could afford, not hung, so the next call
+    runs it again (the abandoned-worker cap still stops a genuinely hung one from piling up threads).
+    A first-party observer runs on the caller thread and cannot be preempted: its time counts against the
+    budget, and an overrun is logged. ``seconds <= 0`` leaves the hook unbudgeted."""
+    if seconds <= 0:
+        yield
+        return
+    started = time.monotonic()
+    token = _hook_deadline.set((hook_name, started + seconds))
+    try:
+        yield
+    finally:
+        _hook_deadline.reset(token)
+        elapsed = time.monotonic() - started
+        if elapsed > seconds:
+            logger.warning("Hook '%s' took %.1fs against its %.1fs budget (observer and plugin callbacks)",
+                           hook_name, elapsed, seconds)
+
+
+def _budget_left(hook_name: str) -> Optional[float]:
+    """Seconds left in the active ``hook_budget`` for ``hook_name`` (may be <= 0), or ``None`` without one."""
+    active = _hook_deadline.get()
+    return active[1] - time.monotonic() if active is not None and active[0] == hook_name else None
+
 
 def _hook_call_identity(kwargs: dict[str, Any], hook_name: str = "") -> Optional[str]:
     """Identity of the call this callback fires for, or ``None`` when the event has none.
@@ -201,9 +238,10 @@ def _hook_call_identity(kwargs: dict[str, Any], hook_name: str = "") -> Optional
     return None
 
 
-def _hook_uses_callback_timeout(hook_name: str, timeout: float) -> bool:
-    """Whether *hook_name* should run under the non-blocking timeout path."""
-    if timeout <= 0 or hook_name in _HOOK_CALLER_THREAD_HOOKS:
+def _hook_uses_callback_timeout(hook_name: str, timeout: float, *, budgeted: bool = False) -> bool:
+    """Whether *hook_name* should run under the non-blocking timeout path. ``budgeted``: a ``hook_budget``
+    is active, which bounds the hook even when the configured timeout is 0."""
+    if (timeout <= 0 and not budgeted) or hook_name in _HOOK_CALLER_THREAD_HOOKS:
         return False
     return hook_name in _HOOK_TIMEOUT_BOUNDED_HOOKS or hook_name in _HOOK_TIMEOUT_FAIL_CLOSED_HOOKS
 
@@ -298,7 +336,7 @@ class PluginDispatchMixin:
         from hermes_cli.plugins import _resolve_hook_callback_timeout
         results: list[Any] = []
         timeout = _resolve_hook_callback_timeout()
-        use_timeout = _hook_uses_callback_timeout(hook_name, timeout)
+        use_timeout = _hook_uses_callback_timeout(hook_name, timeout, budgeted=_budget_left(hook_name) is not None)
         fail_closed = hook_name in _HOOK_TIMEOUT_FAIL_CLOSED_HOOKS
         for cb in callbacks:
             try:
@@ -354,6 +392,16 @@ class PluginDispatchMixin:
         (worker abandoned, never joined), or the worker could not be started. Exceptions
         propagate."""
         callback_name = getattr(cb, "__name__", repr(cb))
+        # An active hook_budget caps this callback to the time left. ``clamped`` marks a timeout the budget
+        # (not the configured limit) imposed: that one is not evidence of a hung plugin (see below).
+        clamped = False
+        if (left := _budget_left(hook_name)) is not None:
+            if left <= 0:
+                logger.warning("Hook '%s' callback %s skipped: the hook's time budget is spent", hook_name,
+                               callback_name)
+                return _HOOK_SKIPPED
+            if timeout <= 0 or left < timeout:
+                timeout, clamped = left, True
         # Suppression is a fact about the CALLBACK — a hung one must keep its back-off —
         # so that key stays coarse. The gate must instead tell CONCURRENT CALLS apart.
         suppression_key = (hook_name, id(cb))
@@ -419,16 +467,19 @@ class PluginDispatchMixin:
             return _HOOK_SKIPPED
         if not done.wait(timeout=timeout):  # do not join — that would reintroduce the hang
             with self._hook_timeout_lock:
-                # See #6622.
-                self._hook_timeout_suppressed_until[suppression_key] = (
-                    time.monotonic() + self._hook_timeout_suppression_seconds)
+                # See #6622. Only a timeout the configured limit set starts the back-off; one the turn
+                # budget set (``clamped``) must not turn a slow-but-healthy callback into 60s of silence.
+                if not clamped:
+                    self._hook_timeout_suppressed_until[suppression_key] = (
+                        time.monotonic() + self._hook_timeout_suppression_seconds)
                 # The worker may have finished (and released its token) between the wait
                 # expiring and this lock; recording it as abandoned then would block the
                 # callback for that call id until reload with no thread behind it.
                 if self._hook_running_callbacks.get(gate_key) is token:
                     self._hook_abandoned.setdefault(suppression_key, set()).add(gate_key)
             logger.warning(
-                "Hook '%s' callback %s timed out after %gs — skipping", hook_name, callback_name, timeout)
+                "Hook '%s' callback %s %s after %gs — skipping", hook_name, callback_name,
+                "did not finish inside the hook's time budget" if clamped else "timed out", timeout)
             return _HOOK_SKIPPED
         if "exc" in failure:
             raise failure["exc"]

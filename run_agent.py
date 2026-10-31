@@ -107,6 +107,7 @@ from tools.browser_session_lifecycle import cleanup_browser
 from tools.connectors.turn import agent_connection_surface, scoped_connection_surface
 
 from agent.memory_provider import is_trivial_prompt
+from agent.dispatcher_latency import skip_recall_for_turn
 from agent.client_lifecycle import ClientLifecycleMixin
 from agent.stream_delivery import StreamDeliveryMixin
 from agent.status_output import StatusOutputMixin
@@ -912,8 +913,9 @@ class AIAgent(
             if turn_author is not None:
                 sync_kwargs["turn_author"] = turn_author
             self._memory_manager.sync_all(user_text, response_text, **sync_kwargs)
-            # Sibling of the build_turn_context() prefetch gate: don't key recall on zero-signal prompts.
-            if not is_trivial_prompt(user_text):
+            # Sibling of the build_turn_context() prefetch gate: don't key recall on zero-signal prompts,
+            # nor (dispatcher sessions) on a completion notice's machine text.
+            if not is_trivial_prompt(user_text) and not skip_recall_for_turn(self):
                 self._memory_manager.queue_prefetch_all(user_text, session_id=self.session_id or "")
         except Exception:
             pass
