@@ -1,10 +1,11 @@
 """Text-response stop gates for the conversation turn loop.
 
-When the model stops with a text answer, four gates may instead append the answer as an
+When the model stops with a text answer, five gates may instead append the answer as an
 interim row plus a user-role nudge and continue the turn: late language-server verdicts on this
 turn's edits (a durable row, see ``_late_lsp_verdicts``), verify-on-stop (#65919),
-the ``pre_verify`` plugin hook after code edits, and the kanban worker terminal-tool guard.
-Each keeps the candidate answer as a budget-exhaustion fallback
+the ``pre_verify`` plugin hook after code edits, the kanban worker terminal-tool guard, and the
+dispatcher reply nudge (a bare silence marker on a turn that owes the user a reply, see
+``agent.dispatcher_ack``). Each keeps the candidate answer as a budget-exhaustion fallback
 (``pending_verification_response``) and clears ``final_response`` so the finalizer can tell
 this gate from error exits (#61631). Nothing here imports ``agent.conversation_loop`` at
 module level (cycle).
@@ -17,6 +18,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from agent.dispatcher_ack import NUDGE_FLAG, ack_nudge, end_marker_segment
 from agent.message_metadata import append_message
 
 logger = logging.getLogger("agent.conversation_loop")
@@ -136,9 +138,9 @@ def apply_stop_gates(
     conversation_history: Any, pending_verification_response: Any,
     pending_verification_response_previewed: Any,
 ) -> StopGateVerdict:
-    """Run verify-on-stop → pre_verify hook → kanban stop guard, in that order. Nudges
-    are user-role rows appended only after the assistant answer row, so role alternation
-    holds. Hook lookups are imported lazily from their origin modules (tests patch them
+    """Run late-LSP → verify-on-stop → pre_verify hook → kanban stop guard → dispatcher reply nudge,
+    in that order. Nudges are user-role rows appended only after the assistant answer row, so role
+    alternation holds. Hook lookups are imported lazily from their origin modules (tests patch them
     there)."""
 
     def _continue(nudge: str, flag: str) -> StopGateVerdict:
@@ -215,6 +217,17 @@ def apply_stop_gates(
             "⚠️ Kanban worker tried to exit without a terminal board call "
             "(kanban_complete/kanban_request_review/kanban_block) — nudging to finish"
         )
+        return verdict
+
+    _reply_nudge = ack_nudge(agent, final_response)
+    if _reply_nudge:
+        # The bare marker is scaffolding too (flagged, never persisted or returned), and is not emitted
+        # as an interim: the user must not see it. Both flagged rows are dropped when a real reply lands.
+        final_msg[NUDGE_FLAG] = True
+        append_message(messages, final_msg)
+        verdict = _continue(_reply_nudge, NUDGE_FLAG)
+        end_marker_segment(agent)
+        logger.info("dispatcher reply nudge issued (attempt %d)", agent._ack_nudges)
         return verdict
     return StopGateVerdict(
         continue_turn=False, final_response=final_response,
