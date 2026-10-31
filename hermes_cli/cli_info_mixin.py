@@ -899,7 +899,9 @@ class CLIInfoMixin:
         _auto = _mcp_cfg.get("auto_reload_on_config_change", True) if isinstance(_mcp_cfg, dict) else True
         self._config_mcp_servers = new_mcp
 
-        if not _auto:
+        if not _auto or self._busy_dispatches():
+            # A dispatcher session's tool surface is frozen at creation (prompt cache): a silent reload would
+            # rebuild it mid-conversation, so it is only pointed at /reload-mcp.
             print()
             print(t("cli.mcp_watch.changed_reload_skipped"))
             print(f"   {t('cli.mcp_watch.not_applied_run')}")

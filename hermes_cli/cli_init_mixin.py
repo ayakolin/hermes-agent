@@ -5,7 +5,7 @@ Mixin split out of ``cli.py``; bound onto ``HermesCLI`` via the MRO.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import logging
 import os
 import queue

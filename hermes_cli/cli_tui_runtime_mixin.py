@@ -70,17 +70,34 @@ class CLITuiRuntimeMixin:
         return hold, None
 
     def _tui_idle_tick(self):
-        """Idle housekeeping between inputs (agent not running)."""
-        self._check_config_mcp_changes()  # auto-reload MCP on mcp_servers change
+        """Idle housekeeping between inputs (agent not running).
+
+        Order: a gateway-notification turn first (it is the user-visible reply), then termios drift, the loop
+        tick, the goal resume, and last the MCP config watcher — which is throttled but costs seconds when it
+        actually reloads. Every step is guarded so a raising one never loses the input the loop takes next."""
+        with suppress(Exception):
+            self._drain_process_notifications("cli-idle")  # may queue a turn the input loop runs now
+        if self._tui_took_a_turn():
+            return  # its reply is owed first; the next tick does the housekeeping
         # Termios drift heal first: a drifted tty makes the CLI look dead while the loop is healthy.
         for step in (
             self._check_termios_drift,
-            lambda: self._drain_process_notifications("cli-idle"),
             self._maybe_fire_loop_tick,
             self._maybe_resume_parked_goal,
+            self._check_config_mcp_changes,  # auto-reload MCP on mcp_servers change
         ):
             with suppress(Exception):
                 step()
+
+    def _tui_took_a_turn(self):
+        """A gateway-admitted turn is waiting at the head of ``_pending_input``."""
+        pending = getattr(self, "_pending_input", None)
+        if pending is None:
+            return False
+        with pending.mutex:
+            head = pending.queue[0] if pending.queue else None
+        from tools.process_registry_notifications import TimelineNotification
+        return bool(getattr(head, "admission_id", None) or isinstance(head, TimelineNotification))
 
     def _tui_dock_drop_dequeued(self):
         """Re-read the live-work dock once an input has left ``_pending_input``.

@@ -77,6 +77,10 @@ class SessionState:
         # Called (loop thread) with each ``request.cancel`` payload: the agent thread may be parked in a
         # modal answering that very request (another viewer settled it), so it cannot read the queue.
         self.request_listeners: list = []
+        # Called (loop thread, no RPC) when a pushed ``subagent.*`` event or a moved active-subagent count
+        # says the roster changed: the CLI re-reads ``subagent.list`` on its next tick.
+        self.roster_listeners: list = []
+        self._active_subagents = None
         # A gateway-admitted notification turn the idle CLI queued a header for (gateway_tools_notify).
         self.admitted_turn: dict | None = None
         # The owner's pending admissions as last published (snapshot or ``session.info``), and the
@@ -97,6 +101,10 @@ class SessionState:
         self.queued_at: dict = {}
         self.recovered_seq = 0
         self.missed: set = set()
+        # ``admission_id -> the message.start card`` of an admitted notification turn whose start this viewer
+        # dropped outside its turn (a local turn's drain or pump). ``gateway_tools_notify.recover_automation``
+        # paints it from its receipt; bounded, since a turn it can never read stops mattering eventually.
+        self.missed_cards: dict = {}
         # ``session.replay_gap``s seen, and how many a re-attach covered: the owner retired this viewer's
         # subscription on overflow, so its frames stop until ``GatewayConnection.reattach``.
         self.gaps = self.attached_gaps = 0
@@ -137,20 +145,49 @@ class SessionState:
             # reader can't map (``session_usage.usage_frame``): the counters win when present.
             nested = payload.get("usage")
             flat = isinstance(payload.get("api_calls"), int) or not isinstance(nested, dict)
+            before = self._active_subagents
             self.apply_usage(payload if flat else nested)
+            if self._active_subagents != before:
+                self._roster_changed()  # a child started or finished: the roster is stale now
+        elif kind in _ROSTER_EVENTS:
+            self._roster_changed()
         elif kind == "request.cancel" and isinstance(payload, dict):
             for listener in list(self.request_listeners):
                 listener(payload)
         elif kind == "session.replay_gap":
             self.gaps += 1
 
+    def _roster_changed(self):
+        """A pushed ``subagent.*`` event (or a moved active count): tell the listeners, on the loop thread.
+        They only mark state — never an RPC, which would block the frame pump."""
+        for listener in list(self.roster_listeners):
+            try:
+                listener()
+            except Exception:  # health: allow BLE001 -- a roster repaint must never stop the event pump
+                logger.debug("roster listener failed", exc_info=True)
+
     def apply_usage(self, usage):
         """One session-cumulative usage dict (``session.usage`` payload or ``session.stats`` result)."""
         if not isinstance(usage, dict):
             return
         self.usage = dict(usage)
+        self._active_subagents = usage.get("active_subagents")
         for listener in list(self.usage_listeners):
             listener(self.usage)
+
+
+def register_roster_listener(connection, session_id):
+    """Make this viewer's CLI re-read the roster when ``session_id``'s children change (idempotent per
+    state: ``connection.state(sid)`` survives a rebind, and a second registration would fire twice)."""
+    state = connection.state(session_id)
+    if getattr(state, "_roster_push_registered", False):
+        return
+    state._roster_push_registered = True
+    from hermes_cli.gateway_tools import register_roster_push
+    state.roster_listeners.append(lambda: register_roster_push(session_id, session_id))
+
+
+_ROSTER_EVENTS = frozenset({"subagent.spawn_requested", "subagent.start", "subagent.complete"})
 
 
 class GatewayConnection:

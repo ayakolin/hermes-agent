@@ -37,19 +37,25 @@ def _card(params):
 def queue_admitted_turn(cli, store) -> None:
     """Idle tick: find a gateway-admitted notification turn's ``message.start`` for this session and
     queue main's ``TimelineNotification`` for it. Frames before it are the between-turn leftovers
-    ``run_conversation`` would discard anyway; frames after it stay queued for the pump."""
+    ``run_conversation`` would discard anyway; frames after it stay queued for the pump.
+
+    When the stream holds no start, one this viewer dropped earlier is painted from its receipt
+    (``recover_automation``): its turn already ran in the owner, so nothing else would show it."""
+    from hermes_cli.gateway_foreign_turns import recover_automation
     from tools.process_registry_notifications import TimelineNotification
     connection, session_id = store.connection, getattr(cli, "session_id", None)
     state = connection.state(session_id)
     if _adoption_waiting(cli, state):
         return  # an adopted /queue turn is waiting for the input loop: its frames stay queued for its pump
-    state.admitted_turn = None  # a header queued earlier whose turn never ran is stale now
+    if not _recovered_turn_pending(cli, state):
+        state.admitted_turn = None  # a header queued earlier whose turn never ran is stale now
     events = connection.events
     while True:
         try:
             frame = events.get_nowait()
         except queue.Empty:
             recover_queued(cli, store)
+            recover_automation(cli, store)
             return
         if isinstance(frame, Exception):
             from hermes_cli.gateway_connection import lost_before
@@ -84,9 +90,11 @@ def queue_admitted_turn(cli, store) -> None:
             continue
         state.admitted_turn = {"admission_id": params["admission_id"], "text": card["text"],
                                "execution_generation": params.get("execution_generation")}
-        _put_first(cli._pending_input, TimelineNotification(
-            card["text"], card["display_text"], card["display_kind"],
-            card.get("notification_category") or "result"))
+        state.missed_cards.pop(params["admission_id"], None)  # painted now, nothing to recover
+        row = TimelineNotification(card["text"], card["display_text"], card["display_kind"],
+                                   card.get("notification_category") or "result")
+        row.admission_id = params["admission_id"]
+        _put_first(cli._pending_input, row)
         return
 
 
@@ -110,6 +118,22 @@ def _adoption_waiting(cli, state) -> bool:
     for admission in [a for a in state.adopted if a not in waiting]:
         state.adopted.pop(admission, None)
     return bool(state.adopted)
+
+
+def _recovered_turn_pending(cli, state) -> bool:
+    """A notification turn recovered from its receipt is still waiting for the input loop: its
+    ``admitted_turn`` must survive the next tick's reset (which only clears a stale header)."""
+    adopted = getattr(state, "admitted_turn", None)
+    if not adopted or not adopted.get("recovered"):
+        return False
+    pending = getattr(cli, "_pending_input", None)
+    if pending is None:
+        return False
+    with pending.mutex:
+        for item in pending.queue:
+            if getattr(item, "admission_id", None) == adopted.get("admission_id"):
+                return True
+    return False  # it ran (or was dropped): the entry is stale
 
 
 _NEVER_RAN = {"cancelled", "rejected"}
@@ -163,9 +187,29 @@ def recover_queued(cli, store) -> None:
 
 def missed_start(state, params) -> None:
     """A frame dropped outside its turn: a ``/queue`` admission's ``message.start`` is remembered so
-    the idle tick paints that turn from its receipt instead of losing it."""
-    if params.get("type") == "message.start" and params.get("admission_id") in state.queued_inputs:
+    the idle tick paints that turn from its receipt instead of losing it. An admitted notification turn's
+    start is remembered with its card for ``recover_automation``: the user would otherwise see only the
+    turn after it, never the "background work finished" line driving it."""
+    if params.get("type") != "message.start" or not params.get("admission_id"):
+        return
+    if params["admission_id"] in state.queued_inputs:
         state.missed.add(params["admission_id"])
+        return
+    card = _card(params)
+    if card is None:
+        return
+    store_missed_card(state, params["admission_id"], {**card, "execution_generation": params.get("execution_generation")})
+
+
+_MAX_MISSED_CARDS = 20
+
+
+def store_missed_card(state, admission_id, card):
+    """Remember one dropped admission's card, oldest evicted first (a start whose admission can never be read
+    must not grow the map without bound)."""
+    state.missed_cards[admission_id] = card
+    while len(state.missed_cards) > _MAX_MISSED_CARDS:
+        state.missed_cards.pop(next(iter(state.missed_cards)))
 
 
 def _put_first(pending, item):

@@ -141,6 +141,14 @@ class GatewayProcessView:
         self._subagents_watch_until = time.time() + seconds
         self._subagents_polled = 0.0
 
+    def roster_bind_session(self, sid, previous):
+        """A pushed ``subagent.*`` event named the session this view is now bound to (it followed ``/new``,
+        ``/resume`` or a compression rotation): drop the other session's roster and poll this one next."""
+        if sid and sid != previous:
+            self._subagents = []
+            self._subagents_seen = 0.0
+            self._subagents_polled = 0.0
+
     def subagent_rows(self, *, busy):
         """The session's live children (``subagent.list``). Asks at most once a second, and only
         while a turn runs (``busy``), children were listed last time, the gateway counts some, or
@@ -258,7 +266,21 @@ def bind(agent):
 def bind_session(cli, connection):
     """Called when the CLI opens its gateway session, so ``/agents``, ``/stop``, the dock and the status
     bar read the session's processes before the first turn (a resumed session's work keeps running)."""
-    return bind(_OpenedSession(cli, connection))
+    view = bind(_OpenedSession(cli, connection))
+    from hermes_cli.gateway_connection import register_roster_listener
+    register_roster_listener(connection, cli.session_id)
+    return view
+
+
+def register_roster_push(sid, previous):
+    """``SessionState``'s roster listener: a pushed ``subagent.*`` event (or a moved active count) re-arms
+    the view's watch window so the next tick reads ``subagent.list`` at once. The view is resolved HERE, at
+    call time: ``bind`` replaces it on every rebind, and a captured one would watch the wrong session."""
+    view = process_view()
+    if view is None:
+        return
+    view.roster_bind_session(sid, previous)
+    view.watch_subagents()
 
 
 def mark_dirty():
