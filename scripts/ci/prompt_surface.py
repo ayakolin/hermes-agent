@@ -92,6 +92,9 @@ def _pin_environment() -> None:
     # The toolchain probe line reports the host's python/node/pip; it is environment, not code.
     from tools import env_probe
     env_probe.get_environment_probe_line = lambda **_k: ""  # type: ignore[assignment]
+    # A WSL laptop would otherwise bake the WSL host line and hint into every surface.
+    from agent import prompt_builder
+    prompt_builder.is_wsl = lambda: False  # type: ignore[assignment]
 
 
 class _ImportFailures(logging.Handler):
