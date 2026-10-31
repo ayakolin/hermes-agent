@@ -236,13 +236,17 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
         idx, r_truncated = r.get("task_index", 0), _is_truncated(r)
         r_status, r_summary, r_error = r.get("status", "?"), r.get("summary"), r.get("error")
         r_goal = goals[idx] if idx < len(goals) else r.get("goal", "")
-        icon = "⚠" if r_truncated else ("✓" if r_status in _DONE else "✗")
+        asks = isinstance(r.get("needs_input"), dict)
+        icon = "?" if asks else ("⚠" if r_truncated else ("✓" if r_status in _DONE else "✗"))
         header = (f"--- {icon} TASK {idx + 1}/{n}" + (f": {r_goal}" if r_goal else "") + f"  (status={r_status}"
+                  + (", NEEDS INPUT" if asks else "")
                   + (f", api_calls={r['api_calls']}" if r.get("api_calls") else "")
                   + (f", {r['duration_seconds']}s" if r.get("duration_seconds") is not None else "")
                   + (", TRUNCATED: hit max_iterations — work may be incomplete" if r_truncated else ""))
         lines += ["", header + ") ---"]
-        if r_status in _DONE and r_summary:
+        if asks:
+            lines += _needs_input_section(r)
+        elif r_status in _DONE and r_summary:
             if r_truncated:
                 lines.append(_TRUNCATED_SUMMARY_NOTE)
             lines.append(r_summary)
@@ -256,6 +260,17 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
             lines.append(f"Full live transcript (complete tool/assistant trace): {r['live_transcript']}")
         lines += _process_accounting_lines(r)
     return "\n".join(lines)
+
+
+def _needs_input_section(r: dict) -> list[str]:
+    """A result entry that carries ``needs_input``: the request, then the work done before it (the entry's
+    ``summary`` is the question itself when there was none)."""
+    from tools.needs_input_tool import needs_input_lines
+    lines = needs_input_lines(r)
+    work = str(r.get("summary") or "").strip()
+    if work and work != r["needs_input"].get("question"):
+        lines += ["Work so far:", work]
+    return lines
 
 
 def _process_accounting_lines(r: dict) -> list:
@@ -299,9 +314,12 @@ def _format_async_delegation(evt: dict) -> str:
     lines += _notice_lines([evt]) + [
         f"Status: {status}" + (f"   API calls: {evt['api_calls']}" if evt.get("api_calls") is not None else "")
         + f"   Duration: {evt.get('duration_seconds', '?')}s"
-        + (" [TRUNCATED: hit max_iterations — work may be incomplete]" if truncated else ""),
+        + (" [TRUNCATED: hit max_iterations — work may be incomplete]" if truncated else "")
+        + ("   [NEEDS INPUT]" if isinstance(evt.get("needs_input"), dict) else ""),
         "--- RESULT ---"]
-    if status in _DONE and summary:
+    if isinstance(evt.get("needs_input"), dict):
+        lines += _needs_input_section(evt)
+    elif status in _DONE and summary:
         if truncated:
             lines.append(_TRUNCATED_SUMMARY_NOTE)
         lines.append(summary)
@@ -331,7 +349,7 @@ def async_delegation_display_text(evt: dict) -> str:
         status = result.get("status") or ("failed" if result.get("error") else "completed")
         label = ("Incomplete" if _is_truncated(result) else "Completed") if status in _DONE else (
             status_labels.get(status, "Incomplete"))
-        labels.append(label)
+        labels.append("Needs Input" if isinstance(result.get("needs_input"), dict) else label)
         index = result.get("task_index", 0)
         goal = goals[index] if 0 <= index < len(goals) else result.get("goal", "")
         titles.append(" ".join(str(goal or "Background task").split()))

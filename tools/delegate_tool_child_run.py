@@ -23,6 +23,7 @@ from tools.delegate_tool_registry import (
 from tools.delegate_tool_results import (
     _extract_output_tail, _looks_like_error_output, _stringify_tool_content, _summarize_tool_arguments,
 )
+from tools.needs_input_tool import attach_needs_input
 
 logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
 
@@ -692,6 +693,7 @@ def _build_result_entry(
         entry["missed_steer"] = _missed_steer
         _miss_note = ("[steer did not land — the subagent finished before it could " f"be delivered: {_missed_steer}]")
         entry["summary"] = f"{summary}\n\n{_miss_note}" if summary else _miss_note
+    attach_needs_input(entry, child, result)  # a run that ended on its own needs_input call is completed, not interrupted
     return entry
 
 

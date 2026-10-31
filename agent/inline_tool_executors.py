@@ -295,6 +295,11 @@ _RAW_INLINE_TOOL_EXECUTORS: dict[str, InlineToolExecutor] = {
         ("accent", "accent"), ("mode", "mode"), ("layout", "layout"), ("picker", "picker"),
     ),
     "setup_beat": _setup_beat,
+    # A dispatcher executor's way to hand a question back; ends the child's turn (tools/needs_input_tool.py).
+    "needs_input": _tool(
+        "tools.needs_input_tool", "needs_input_tool", ("kind", "kind"), ("question", "question"),
+        ("options", "options"), ("detail", "detail"), agent=lambda agent, ctx: agent,
+    ),
     "manage_connections": _manage_connections,
     "manage_catalog": _manage_catalog,
     "setup_mcp": _setup_mcp_shim,

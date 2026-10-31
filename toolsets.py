@@ -148,6 +148,12 @@ TOOLSETS = {
         ["manage_catalog"],
         platforms=frozenset({"desktop"}),
     ),
+    # Added by agent/executor_baseline.py to a dispatcher session's delegate_task children; no session lists it.
+    "executor": _ts(
+        "Executor-only status tools for dispatcher subagents (needs_input)",
+        ["needs_input"],
+        platforms=frozenset({"subagent"}),
+    ),
     "clarify": _ts("Ask the user clarifying questions (multiple-choice or open-ended)", ["clarify"]),
     "code_execution": _ts("Run Python scripts that call tools programmatically (reduces LLM round trips)", ["execute_code"]),
     "delegation": _ts("Spawn subagents with isolated context for complex subtasks", ["delegate_task"]),
