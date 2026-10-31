@@ -184,6 +184,9 @@ def main():
                       TELEGRAM_ALLOWED_USERS='fixture-user', TERMINAL_ENV='local')
     Path(os.environ['HERMES_HOME'], 'config.yaml').write_text(
         f'model:\n  default: local-control\n  provider: custom\n  base_url: {url}\n'
+        # The fixture drives an approval from the session's own turn (a dangerous terminal command);
+        # a dispatcher chat has no terminal tool, so this stays classic.
+        'dispatcher:\n  enabled: false\n'
         'approvals:\n  mode: manual\n  timeout: 30\n'
         'streaming:\n  enabled: false\n'
         'auxiliary:\n  title_generation:\n    enabled: false\n')

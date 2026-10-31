@@ -139,6 +139,8 @@ def main():
     os.environ.update(OPENAI_API_KEY='loopback-only', OPENAI_BASE_URL=url, TELEGRAM_ALLOWED_USERS='fixture-user')
     Path(os.environ['HERMES_HOME'], 'config.yaml').write_text(
         f'model:\n  default: local\n  provider: custom\n  base_url: {url}\n'
+        # The fixture's model asks the clarify tool; a dispatcher chat has none (it asks in plain text).
+        'dispatcher:\n  enabled: false\n'
         'agent:\n  clarify_timeout: 25\nauxiliary:\n  title_generation:\n    enabled: false\n')
     try:
         asyncio.run(probe(peer))
