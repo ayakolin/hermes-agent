@@ -286,6 +286,9 @@ def main():
                       TELEGRAM_ALLOWED_USERS='fixture-user', TERMINAL_ENV='local')
     Path(os.environ['HERMES_HOME'], 'config.yaml').write_text(
         f'model:\n  default: local-stream\n  provider: custom\n  base_url: {url}\n'
+        # The stream is the subject here: a classic chat, so the fixture's terminal tool exists
+        # (a dispatcher chat runs the posture toolset and hands the work off instead).
+        'dispatcher:\n  enabled: false\n'
         'streaming:\n  enabled: true\nauxiliary:\n  title_generation:\n    enabled: false\n')
     try:
         asyncio.run(probe(peer, target))

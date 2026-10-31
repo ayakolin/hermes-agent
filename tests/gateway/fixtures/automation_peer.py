@@ -111,6 +111,9 @@ async def probe(root, base, mode):
         async with websockets.serve(connector, '127.0.0.1', 0) as relay:
             url = f'http://127.0.0.1:{model.server_port}/v1'
             cfg = {'gateway': {'multiplex_profiles': False},
+                # A classic chat: the fixture's model asks for the terminal tool, which a dispatcher
+                # session's posture toolset does not carry.
+                'dispatcher': {'enabled': False},
                 'model': {'provider': 'custom', 'default': 'local-fixture', 'base_url': url},
                 'streaming': {'enabled': False}, 'terminal': {'cwd': str(home)},
                 'approvals': {'mode': 'off'},
