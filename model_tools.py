@@ -203,6 +203,19 @@ _tool_defs_cache_lock = threading.Lock()
 _TOOL_DEFS_CACHE_MAX = 8
 
 
+def _remember_resolved_tool_names(tools: list[dict[str, Any]]) -> None:
+    """Record the tool names of the latest ``get_tool_definitions`` for the ``execute_code`` fallback.
+
+    A delegated child (building, refreshing MCP tools or running) never writes: it can build on a pool thread while
+    the parent's next turn resolves its own tools, and the child's narrower list would replace the parent's. Only the
+    parent's resolutions feed the fallback, so nothing has to save and restore the global around child work."""
+    from agent.delegation_context import is_delegated_child_context
+    if is_delegated_child_context():
+        return
+    global _last_resolved_tool_names
+    _last_resolved_tool_names = [t["function"]["name"] for t in tools]
+
+
 def _clear_tool_defs_cache() -> None:
     """Drop memoized results when a dynamic-schema dependency changes (discord caps, sandbox mode)."""
     with _tool_defs_cache_lock:
@@ -244,8 +257,7 @@ def get_tool_definitions(enabled_toolsets: Optional[list[str]] = None, disabled_
                     _tool_defs_cache.pop(next(iter(_tool_defs_cache)))
                 _tool_defs_cache[cache_key] = cached = result
     else:
-        global _last_resolved_tool_names
-        _last_resolved_tool_names = [t["function"]["name"] for t in cached]
+        _remember_resolved_tool_names(cached)
     # Always a shallow copy: run_agent appends memory/LCM schemas to its list; a
     # shared list would accumulate duplicate names (HTTP 400 from DeepSeek/Kimi/MiMo).
     return list(cached)
@@ -499,11 +511,10 @@ def _compute_tool_definitions(enabled_toolsets: Optional[list[str]] = None, disa
     from tools.kanban_toolset_context import scoped_kanban_toolset_selection
     with scoped_kanban_toolset_selection(enabled_toolsets):
         filtered_tools = _apply_dynamic_schemas(registry.get_definitions(tools_to_include, quiet=quiet_mode))
-    global _last_resolved_tool_names
-    _last_resolved_tool_names = [t["function"]["name"] for t in filtered_tools]
+    _remember_resolved_tool_names(filtered_tools)
 
     if not quiet_mode:
-        print(f"🛠️  Final tool selection ({len(filtered_tools)} tools): {', '.join(_last_resolved_tool_names)}"
+        print(f"🛠️  Final tool selection ({len(filtered_tools)} tools): {', '.join(t['function']['name'] for t in filtered_tools)}"
               if filtered_tools else "🛠️  No tools selected (all filtered out or unavailable)")
     # Normalize schema shapes llama.cpp's grammar converter rejects (bare
     # "type": "object", string-valued nodes from malformed MCP servers).

@@ -1102,9 +1102,8 @@ class _ChildRun:
 
     def cleanup(self, *, heartbeat: _Heartbeat, child_pool: Any, leased_cred_id: Any, close_deferred: bool) -> None:
         """Finally-path teardown (idempotent, never raises). Order matters: stop heartbeat → drop registry entry →
-        release credential lease → restore the parent's process-global tool names → detach from the parent's
-        interrupt list → close the child (unless a timed-out worker still owns it) → pop the child's Relay scope if
-        no turn is active."""
+        release credential lease → detach from the parent's interrupt list → close the child (unless a timed-out
+        worker still owns it) → pop the child's Relay scope if no turn is active."""
         child = self.child
         heartbeat.stop()
 
@@ -1115,13 +1114,6 @@ class _ChildRun:
         if child_pool is not None and leased_cred_id is not None:
             with _quiet("Failed to release credential lease: %s"):
                 child_pool.release_lease(leased_cred_id)
-
-        # Restore the parent's tool names so the process-global is correct for
-        # any subsequent execute_code calls or other consumers.
-        import model_tools
-        saved_tool_names = getattr(child, "_delegate_saved_tool_names", None)
-        if isinstance(saved_tool_names, list):
-            model_tools._last_resolved_tool_names = list(saved_tool_names)
 
         _detach_child(self.parent_agent, child)
 

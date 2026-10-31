@@ -62,8 +62,9 @@ Rules for tool code:
   `_load_enabled_toolsets(platform)` (root: capability is a property of the SESSION).
 - **Agent-level tools** (`todo`, `memory`) are intercepted before `handle_function_call()` via the
   `INLINE_TOOL_EXECUTORS` table (`agent/inline_tool_executors.py`; `agent/AGENTS.md`).
-- **`_last_resolved_tool_names`** is a process-global in `model_tools.py`; `_run_single_child()` in
-  `delegate_tool.py` saves/restores it around child runs — readers may see it stale mid-delegation.
+- **`_last_resolved_tool_names`** is a process-global in `model_tools.py` (the `execute_code` fallback when no explicit
+  tool list is passed). `_remember_resolved_tool_names` skips the write inside `delegated_child_context()`, so a
+  child built on a pool thread never replaces the parent's list; nothing saves or restores it around child work.
 - New tools integrate with existing setup UX (`hermes tools`, `hermes setup`, auto-install) rather
   than a raw env var; secrets go in `OPTIONAL_ENV_VARS` (`hermes_cli/AGENTS.md`).
 

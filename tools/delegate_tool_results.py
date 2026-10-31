@@ -311,19 +311,32 @@ def _apply_summary_budget(results: list[dict[str, Any]], parent_agent) -> None:
 _PARENT_FINALIZATION_LOCK_GUARD = threading.Lock()
 _PARENT_FINALIZATION_FALLBACK_LOCK = threading.RLock()
 _CHILD_CONSTRUCTION_LOCK = threading.RLock()
+_CONSTRUCTION_POLL_SECONDS = 0.25
 
-def _build_child_preserving_parent_tools(**kwargs):
-    """Build a child without leaking its resolved toolset into the parent."""
+
+class ChildBuildCancelled(Exception):
+    """The unit was stopped before (or while) its child waited for its turn to be built."""
+
+
+def _build_child_preserving_parent_tools(*, cancel: Optional[threading.Event] = None, **kwargs):
+    """Build one child under the process-wide construction lock (``AIAgent.__init__`` is not thread-safe).
+
+    ``model_tools`` ignores tool-name writes made inside a delegated child, so the parent's resolved tool names need no
+    save and restore here. ``cancel`` lets a stopped background unit leave the lock queue instead of waiting behind
+    another unit's construction: it is checked while waiting, never once construction has begun."""
     from tools.delegate_tool import _build_child_agent
-    import model_tools
-    with _CHILD_CONSTRUCTION_LOCK:
-        parent_tool_names = list(model_tools._last_resolved_tool_names)
-        try:
-            child = _build_child_agent(**kwargs)
-        finally:
-            model_tools._last_resolved_tool_names = parent_tool_names
-    child._delegate_saved_tool_names = parent_tool_names
-    return child
+    if cancel is None:
+        with _CHILD_CONSTRUCTION_LOCK:
+            return _build_child_agent(**kwargs)
+    while not _CHILD_CONSTRUCTION_LOCK.acquire(timeout=_CONSTRUCTION_POLL_SECONDS):
+        if cancel.is_set():
+            raise ChildBuildCancelled()
+    try:
+        if cancel.is_set():
+            raise ChildBuildCancelled()
+        return _build_child_agent(**kwargs)
+    finally:
+        _CHILD_CONSTRUCTION_LOCK.release()
 
 def _parent_finalization_lock(parent_agent) -> threading.RLock:
     """Per-parent lock serializing lifecycle side effects (created once under the guard)."""

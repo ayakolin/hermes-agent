@@ -82,9 +82,9 @@ the nudge pair are flagged `_ack_nudge_synthetic` and registered in all four sca
   (`CONTEXT_FILE_MAX_CHARS` / dynamic cap from the context window / `context_file_max_chars`).
   Never load an install-tree `AGENTS.md` as project context (PR #64611); subdirectory hints reject
   paths outside the working dir so `~/.codex/AGENTS.md` / `~/.claude/CLAUDE.md` never mix in.
-- **`_last_resolved_tool_names` is a process-global in `model_tools.py`.** `_run_single_child()`
-  in `tools/delegate_tool.py` saves/restores it around subagent execution; code reading it may see
-  a temporarily stale value during child runs.
+- **`_last_resolved_tool_names` is a process-global in `model_tools.py`.** Writes made inside
+  `delegated_child_context()` are ignored (`_remember_resolved_tool_names`), so a subagent building on a
+  pool thread cannot replace the parent's list; there is no save/restore around child runs.
 
 ## Compression (`agent/compression_facade.py`, `conversation_compression.py`, `turn_context_compaction.py`)
 
