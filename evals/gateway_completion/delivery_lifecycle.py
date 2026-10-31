@@ -47,7 +47,7 @@ async def main():
     adapter.send_typing = typing_boundary
     adapter.set_message_handler(runner._handle_message)
     runner._running = True
-    idle = asyncio.create_task(runner._async_delegation_watcher(interval=0.05))
+    idle = asyncio.create_task(runner._async_delegation_watcher())
     key = "agent:main:discord:dm:123"
 
     def spawn(label, notify=False, patterns=None):

@@ -692,10 +692,10 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         self._lock = threading.Lock()
         # Side-channel for check_interval watchers (gateway reads after agent run)
         self.pending_watchers: list[dict[str, Any]] = []
-        # Unified queue for all background events (distinguished by "type"); the CLI
-        # process_loop and the gateway drain it after each agent turn to trigger new turns.
-        import queue as _queue_mod
-        self.completion_queue: _queue_mod.Queue = _queue_mod.Queue()
+        # Unified queue for all background events (by "type"); consumers drain it to trigger turns. A put wakes
+        # ``completion_wake`` subscribers; a consumer's retry uses process_registry_wake.requeue (no wake).
+        from tools.process_registry_wake import new_completion_queue
+        self.completion_wake, self.completion_queue = new_completion_queue()
         # Durable delegation completions are NOT rehydrated here: this constructor runs at
         # import time in every process that touches the tools graph (cron clients, `hermes
         # sessions list`, workers), and restoring means writing the canonical ledger. The

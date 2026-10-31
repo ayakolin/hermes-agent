@@ -26,6 +26,7 @@ from gateway.session import SessionEntry, SessionSource, SessionStore
 from gateway.run_shutdown import _delivery_target_key, _log_suppressed, _notice_target_key, _send_error, _send_failed
 from gateway.run_notifications_update import GatewayUpdateNotificationsMixin
 from gateway.run_notifications_ownership import GatewayNotificationOwnershipMixin
+from gateway.run_notifications_wake import WATCH_EVENT_TYPES, GatewayCompletionWakeMixin
 
 # Log-record parity with the origin module.
 logger = logging.getLogger("gateway.run")
@@ -78,6 +79,11 @@ def _refusal_retry_at(step: int) -> float:
     return time.monotonic() + jittered_backoff(
         step, base_delay=_WATCH_INJECTION_RETRY_BASE_DELAY,
         max_delay=_COMPLETION_INJECTION_RETRY_MAX_DELAY, jitter_ratio=0.0)
+
+
+def _until(retry_at: float) -> float:
+    """Seconds until a ``_refusal_retry_at`` stamp (<= 0 once due), on this module's clock."""
+    return retry_at - time.monotonic()
 
 # Durable async-delegation claim transitions: kind -> (tools.async_delegation function, failure log).
 _DURABLE_CLAIM_OPS = {
@@ -170,7 +176,8 @@ def _watch_notification_metadata(evt: dict, source) -> dict[str, Any]:
     return metadata
 
 
-class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotificationOwnershipMixin):
+class GatewayNotificationsMixin(
+    GatewayUpdateNotificationsMixin, GatewayNotificationOwnershipMixin, GatewayCompletionWakeMixin):
     """Process/completion/update notifications, media delivery and async-delegation delivery for GatewayRunner."""
 
     # Coalescing keys: process completions (short-window fan-in) and async delegations (+ parent session).
@@ -720,21 +727,32 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
     async def _drain_watch_notifications(self, completion_queue) -> None:
         """Consume queued watch events and inject them when notifications are enabled.
 
-        The queue is ALWAYS drained (so watch events don't rot or requeue-spin) but injection is
-        skipped when the OWNING profile's ``display.background_process_notifications`` is ``off``
-        — one shared queue carries every served profile's events, so the gate is evaluated per
-        event inside its profile scope, never once for the ambient (launch) profile.
+        Everything but async-delegation completions leaves the queue (so watch events don't rot or
+        requeue-spin; a process 'completion' belongs to its per-process watcher); async completions stay
+        queued for ``_async_delegation_watcher``. Injection is skipped when the OWNING profile's
+        ``display.background_process_notifications`` is ``off``: one shared queue carries every served
+        profile's events, so the gate is evaluated per event inside its profile scope.
 
         See #9290.
         """
-        from gateway.run import _drain_gateway_watch_events, _format_gateway_process_notification
-        watch_events = _drain_gateway_watch_events(completion_queue)
+        from tools.process_registry_awaiting import release, take_ready
+        ready = take_ready(completion_queue, 0, accept=lambda evt: evt.get("type") != "async_delegation")
+        try:
+            await self._route_watch_events(
+                completion_queue, [evt for evt in ready if evt.get("type", "completion") in WATCH_EVENT_TYPES])
+        finally:
+            release(ready)
+
+    async def _route_watch_events(self, completion_queue, watch_events: list[dict]) -> None:
+        """Inject each watch event (held in flight by the caller's ``take_ready`` until this returns)."""
+        from gateway.run import _format_gateway_process_notification
+        from tools.process_registry_wake import requeue
         for evt in watch_events:
             next_retry_at = evt.get("_watch_next_retry_at")
-            if next_retry_at is not None and next_retry_at > time.monotonic():
-                # Backoff between refused injections: hold the event for a later drain tick
-                # instead of re-attempting admission every 2 s (#140899).
-                completion_queue.put(evt)
+            if next_retry_at is not None and _until(next_retry_at) > 0:
+                # Backoff between refused injections: hold the event for a later pass; the requeue that
+                # stamped it armed the wake for its due time (#140899).
+                requeue(completion_queue, evt)
                 continue
             async with self._completion_event_scope(evt):
                 from tools.process_registry_notifications import should_surface_notification
@@ -760,7 +778,7 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
 
     @staticmethod
     def _requeue_refused_watch_event(completion_queue, evt: dict) -> None:
-        """Retry a refused watch event on a bounded backoff, never on every 2 s tick (#140899).
+        """Retry a refused watch event on a bounded backoff, never on every pass (#140899).
 
         Only a refusal proven permanent (``WakeNotAccepted.permanent``: the route has no session,
         or the payload is invalid) counts toward the cap that drops it. A transient one (a restart's
@@ -781,8 +799,9 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                     evt.get("type") or "?", evt.get("session_id", "unknown"), refusals,
                 )
                 return
-        evt["_watch_next_retry_at"] = _refusal_retry_at(step)
-        completion_queue.put(evt)
+        evt["_watch_next_retry_at"] = retry_at = _refusal_retry_at(step)
+        from tools.process_registry_wake import requeue
+        requeue(completion_queue, evt, wake_in=_until(retry_at))  # a parked watcher is woken for its due time
 
     def _adapter_by_platform_value(self, platform_name: str):
         """Literal ``p.value == platform_name`` scan over connected adapters (native adapters only)."""
@@ -1580,9 +1599,10 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
             consolidated, primary_evt, sibling_claims=siblings,
         )
         if delivered is None:
-            # Primary dropped/owned elsewhere: retry the unadmitted siblings.
+            # Primary dropped/owned elsewhere: retry the unadmitted siblings on the next pass.
+            from tools.process_registry_wake import requeue
             for evt, _claim_id in siblings:
-                _pr.completion_queue.put(evt)
+                requeue(_pr.completion_queue, evt, wake_in=0)
         return delivered
 
     def _restore_secondary_completion_ledgers(self, profile_homes) -> None:
@@ -1622,71 +1642,6 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                 continue
             if count:
                 logger.info("%s %d undelivered async completion(s) for profile %r", verb, count, profile_name)
-
-    async def _async_delegation_watcher(self, interval: float = 2.0) -> None:
-        """Drain async completions and pattern notifications even while sessions are idle.
-
-        Background subagents and process pattern events have no per-process notification
-        consumer; both must progress without a later foreground turn.
-        """
-        await asyncio.sleep(3)  # let platforms finish connecting
-        from tools.async_delegation import ORPHAN_SWEEP_INTERVAL_S
-        from tools.process_registry import process_registry as _pr
-        last_orphan_sweep = None
-        while self._running:
-            with _log_suppressed(logging.DEBUG, "Async delegation watcher error: %s"):
-                # Completions whose owner process died while this gateway runs (#97202).
-                if last_orphan_sweep is None or time.monotonic() - last_orphan_sweep >= ORPHAN_SWEEP_INTERVAL_S:
-                    last_orphan_sweep = time.monotonic()
-                    await asyncio.to_thread(self._sweep_orphaned_completion_ledgers)
-                # Pattern events also need an idle consumer; foreground turns are optional.
-                await self._drain_watch_notifications(_pr.completion_queue)
-                # Process completions remain owned by their per-process watchers.
-                requeue = []
-                async_events = []
-                while not _pr.completion_queue.empty():
-                    try:
-                        evt = _pr.completion_queue.get_nowait()
-                    except Exception:
-                        break
-                    (async_events if evt.get("type") == "async_delegation" else requeue).append(evt)
-                for evt in requeue:
-                    _pr.completion_queue.put(evt)
-                # A fan-out finishing together yields N completions for one session; group by full route +
-                # parent session so each group becomes ONE consolidated turn.
-                # A same-tick drain often carries several completions for the SAME originating session (a
-                # fan-out of background subagents finishing together). Events for different sessions never
-                # coalesce. See #70300.
-                groups: dict[tuple[str, ...], list[dict]] = {}
-                for evt in async_events:
-                    self._enrich_async_delegation_routing(evt)
-                    groups.setdefault(self._event_route_key(evt, self._ASYNC_GROUP_KEY_FIELDS), []).append(evt)
-                for group in groups.values():
-                    if any(evt.get("_watch_next_retry_at", 0) > time.monotonic() for evt in group):
-                        for evt in group:
-                            _pr.completion_queue.put(evt)
-                        continue
-                    try:
-                        delivered = await self._deliver_async_delegation_group(group)
-                        if delivered is False:
-                            self._back_off_refused_completions(group)
-                            for evt in group:
-                                _pr.completion_queue.put(evt)
-                    except Exception as e:
-                        for evt in group:
-                            _pr.completion_queue.put(evt)
-                        logger.error("Async delegation injection error: %s", e)
-            await asyncio.sleep(interval)
-
-    @staticmethod
-    def _back_off_refused_completions(group: list[dict]) -> None:
-        """Space out an undelivered async group's retries instead of re-offering it every 2 s pass.
-        The backoff only paces; the durable ledger decides when a row gives up (a permanent refusal
-        spends a delivery attempt there, so the count survives restarts) (#141153)."""
-        for evt in group:
-            step = int(evt.get("_watch_retry_step") or 0) + 1
-            evt["_watch_retry_step"] = step
-            evt["_watch_next_retry_at"] = _refusal_retry_at(step)
 
     @staticmethod
     def _redacted_output_tail(session, limit: int) -> str:

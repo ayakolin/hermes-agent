@@ -698,6 +698,17 @@ while it stops, drained at startup and post-turn. Agent-notify watchers send no 
 receipt (the agent's next turn is the report) unless the launching turn is still running at exit
 — then the injection only queues a follow-up, so the concise receipt goes out immediately.
 
+The idle completion watcher is event-driven. `ProcessRegistry.completion_queue` is a `WakingQueue`
+(`tools/process_registry_wake.py`): every producer's `put` sets a flag the watcher parks on through
+`completion_wake`, so a completion starts its turn after `delegation.completion_batch_window_seconds`
+(default 0.3 s; 0 disables batching) instead of the next poll tick. The window lets completions that
+land together become one turn. The flag is cleared before each `take_ready` snapshot, so a put that
+lands mid-pass always wakes the next park. A consumer that hands an event back uses `requeue()` (no
+wake, so it cannot spin on its own backoff items) with `wake_in=` set to the retry time, so a parked
+watcher is woken for it; the park timeout (soonest of the next orphan sweep and the earliest queued
+retry stamp) is the fallback for a swapped-in plain queue. A process `completion` event is dropped by
+this consumer as before (its per-process watcher owns it), so it never pins its owner as awaiting.
+
 The idle completion watcher also drains `watch_match` / `watch_disabled`; no user follow-up is
 required. Notify-off drains these without waking. Transport failures are retried; unavailable
 durable completion owners/transports do not spend delivery attempts. Profile-namespaced process

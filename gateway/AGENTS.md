@@ -65,6 +65,14 @@ MagicMock adapters in older tests auto-create truthy attributes.
 without spending an attempt. Long form: `website/docs/developer-guide/gateway-internals.md`
 § Background process notifications.
 
+The idle consumer of `completion_queue` (`run_notifications_wake.py::_async_delegation_watcher`) is woken
+by the put, not polled: `WakingQueue.put` notifies `process_registry.completion_wake`, the watcher waits
+`delegation.completion_batch_window_seconds` so completions that land together become one turn, then makes
+one pass over a single `take_ready` snapshot (watch events routed, async completions delivered per route,
+a process `completion` dropped). A consumer's own retry uses `process_registry_wake.requeue`, never a
+notifying `put` (it would wake the consumer that just requeued); every refusal requeue passes `wake_in=` so a
+parked watcher is woken at the retry time. Tests bound the watcher by patching `_park_until_completion`.
+
 Canonical local CLI/TUI/Desktop sessions admit completion and watch events into the same durable
 FIFO as human input (private launch policy, `internal_notification` display kind); observers never
 own or consume those turns, and an interrupted started turn stays unknown and pauses its followers.

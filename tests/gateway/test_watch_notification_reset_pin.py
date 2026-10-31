@@ -189,21 +189,19 @@ async def test_refused_notice_backs_off_and_only_a_permanent_refusal_drops(monke
         authority.db.close()
 
 
-_REAL_SLEEP = asyncio.sleep
-
-
 async def _run_async_watcher(runner, monkeypatch, clock, *, ticks):
     """Run the real async watcher for ``ticks`` passes, one simulated second apart."""
     seen = []
 
-    async def tick(delay):
-        seen.append(delay)
+    async def park(_flag, timeout):
+        seen.append(timeout)
         clock.now += 1
         runner._running = len(seen) < ticks
-        await _REAL_SLEEP(0)
-    monkeypatch.setattr(asyncio, 'sleep', tick)
+        await asyncio.sleep(0)
+        return False
+    monkeypatch.setattr(runner, '_park_until_completion', park)
     runner._running = True
-    await runner._async_delegation_watcher(interval=0)
+    await runner._async_delegation_watcher()
 
 
 def _persist_delegation(entry, pinned, delegation_id):

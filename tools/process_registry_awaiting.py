@@ -44,15 +44,22 @@ def _adjust(owners, delta: int) -> None:
                 del _in_flight[owner]
 
 
-def take_ready(queue, timeout: float) -> list:
+def take_ready(queue, timeout: float, accept=None) -> list:
     """Dequeue everything queued (waiting up to ``timeout`` for the first event) and hold each event's owner in the
     same critical section, so no reaper check can observe an event as neither queued nor held. The caller MUST pass
-    the result to ``release`` once routing returns."""
+    the result to ``release`` once routing returns.
+
+    ``accept(evt)``: take only the events it accepts; the rest stay queued, in order, untouched (a consumer that
+    owns one kind of event must not dequeue and re-put the others). It runs under the queue's mutex, so it must be
+    a cheap pure check on the event dict."""
     with queue.not_empty:
         if not queue._qsize() and timeout > 0:
             queue.not_empty.wait(timeout)
-        events = list(queue.queue)
+        events, kept = [], []
+        for evt in queue.queue:
+            (events if accept is None or accept(evt) else kept).append(evt)
         queue.queue.clear()
+        queue.queue.extend(kept)
         if events:
             queue.not_full.notify_all()
             _adjust((_owner(e) for e in events), +1)

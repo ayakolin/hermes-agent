@@ -814,39 +814,26 @@ async def test_async_delegation_apiserver_persist_failure_is_retryable(
     assert result is False
 
 
-def test_gateway_drain_retains_and_formats_overflow_events():
-    """watch_overflow_* events must survive the gateway drain and render
-    their summary — previously they were discarded at the drain (only
-    watch_match/watch_disabled were retained) and had no formatter branch."""
-    import asyncio
-    from gateway.run import (
-        _drain_gateway_watch_events,
-        _format_gateway_process_notification,
-    )
+@pytest.mark.asyncio
+async def test_gateway_drain_injects_overflow_events_with_their_summary(monkeypatch, tmp_path):
+    """watch_overflow_* events must survive the gateway drain and render their summary: they were once
+    discarded at the drain (only watch_match/watch_disabled were retained) and had no formatter branch."""
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    adapter = runner.adapters[Platform.TELEGRAM]
+    route = {"session_key": "agent:main:telegram:dm:123:42", "session_id": "proc_a1b2"}
+    completion_queue = queue.Queue()
+    completion_queue.put({**route, "type": "watch_overflow_tripped",
+                          "message": "watch flood detected: 47 notifications suppressed for pattern 'ERROR'"})
+    completion_queue.put({**route, "type": "watch_overflow_released",
+                          "message": "watch flood released: notifications resumed for pattern 'ERROR'"})
 
-    queue = asyncio.Queue()
-    tripped = {
-        "type": "watch_overflow_tripped",
-        "message": "watch flood detected: 47 notifications suppressed for pattern 'ERROR'",
-        "session_id": "proc_a1b2",
-    }
-    released = {
-        "type": "watch_overflow_released",
-        "message": "watch flood released: notifications resumed for pattern 'ERROR'",
-        "session_id": "proc_a1b2",
-    }
-    queue.put_nowait(tripped)
-    queue.put_nowait(released)
+    await runner._drain_watch_notifications(completion_queue)
 
-    retained = _drain_gateway_watch_events(queue)
-    assert retained == [tripped, released]
-
-    out_tripped = _format_gateway_process_notification(tripped)
-    assert "47 notifications suppressed" in out_tripped
-    assert "exit code" not in out_tripped
-    out_released = _format_gateway_process_notification(released)
-    assert "notifications resumed" in out_released
-    assert "exit code" not in out_released
+    assert completion_queue.empty()
+    texts = [call.args[0].text for call in adapter.handle_message.await_args_list]
+    assert len(texts) == 2
+    assert "47 notifications suppressed" in texts[0] and "notifications resumed" in texts[1]
+    assert not any("exit code" in text for text in texts)
 
 
 @pytest.mark.asyncio
