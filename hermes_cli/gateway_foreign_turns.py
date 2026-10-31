@@ -19,7 +19,7 @@ def recover_automation(cli, store) -> None:
     text, generation, ``recovered`` and the receipt when it already settled), so the recovered turn streams
     nothing live and completes from the receipt."""
     from hermes_cli.gateway_client import GatewayClientError
-    from hermes_cli.gateway_tools_notify import _put_first, _recovered_turn_pending
+    from hermes_cli.gateway_tools_notify import _card_row, _put_first, _recovered_turn_pending
     state = store.connection.state(getattr(cli, "session_id", None))
     if not state.missed_cards or _recovered_turn_pending(cli, state):
         return  # one recovered turn at a time; the next is recovered after this one ran
@@ -42,14 +42,7 @@ def recover_automation(cli, store) -> None:
                    "execution_generation": receipt.get("execution_generation", card.get("execution_generation")),
                    "recovered": True}
         if status == "terminal":
-            if receipt.get("outcome") in _NEVER_RAN:
-                continue  # nothing rendered: no card to keep either
             adopted["receipt"] = receipt
         state.admitted_turn = adopted
-        _put_first(cli._pending_input, _recovered_row(admission, card))
+        _put_first(cli._pending_input, _card_row(admission, card))
         return  # one turn at a time
-
-
-def _recovered_row(admission, card):
-    from hermes_cli.gateway_tools_notify import _card_row
-    return _card_row(admission, card)
