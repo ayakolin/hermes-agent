@@ -48,19 +48,24 @@ MODELS = {
     "gemini": "google/gemini-2.5-pro",
     "hermes": "nousresearch/hermes-4-405b",
 }
-# (surface, platform, model family, cwd is a code workspace). Model names gate guidance blocks
-# and the patch dialect, so the matrix runs on cli; one row per other surface catches its hint
-# and toolset; ``cli-code`` adds the coding posture every repo session gets.
+# (surface, platform, model family, cwd is a code workspace, is a dispatcher session). Model names gate
+# guidance blocks and the patch dialect, so the matrix runs on cli; one row per other surface catches its
+# hint and toolset; ``cli-code`` adds the coding posture every repo session gets. Dispatcher mode is on by
+# default for interactive sessions, so its rows are the DEFAULT of every surface that can receive a later
+# turn; ``*-classic`` rows are the control (``dispatcher.enabled: false`` + no coding posture on cli, the
+# postures never dispatching), and cron is classic-only (it cannot receive a later turn).
 SURFACES = (
-    ("cli.claude", "cli", "claude", False),
-    ("cli.gpt", "cli", "gpt", False),
-    ("cli.gemini", "cli", "gemini", False),
-    ("cli.hermes", "cli", "hermes", False),
-    ("cli-code.claude", "cli", "claude", True),
-    ("desktop.claude", "desktop", "claude", False),
-    ("telegram.claude", "telegram", "claude", False),
-    ("discord.claude", "discord", "claude", False),
-    ("cron.claude", "cron", "claude", False),
+    ("cli.claude", "cli", "claude", False, True),
+    ("cli.gpt", "cli", "gpt", False, True),
+    ("cli.gemini", "cli", "gemini", False, True),
+    ("cli.hermes", "cli", "hermes", False, True),
+    ("cli-code.claude", "cli", "claude", True, False),
+    ("cli-classic.claude", "cli", "claude", False, False),
+    ("cli-code-classic.claude", "cli", "claude", True, False),
+    ("desktop.claude", "desktop", "claude", False, True),
+    ("telegram.claude", "telegram", "claude", False, True),
+    ("discord.claude", "discord", "claude", False, True),
+    ("cron.claude", "cron", "claude", False, False),
 )
 # Desktop resolves toolsets in tui_gateway (client-surface toolsets folded in); the gateway, cron
 # and classic CLI read the platform toolsets directly.
@@ -119,7 +124,16 @@ def _scrub(text: str, home: Path) -> str:
     return text
 
 
-def _enabled_toolsets(platform: str) -> list[str]:
+def _enabled_toolsets(platform: str, dispatcher: bool = False) -> list[str]:
+    """The session's toolsets through the production resolver of its surface (dispatcher mode included)."""
+    if dispatcher:
+        from agent.dispatcher_session import dispatcher_toolsets
+        from hermes_cli.config import load_config
+        selected = list(dispatcher_toolsets(load_config()))
+        if platform in TUI_GATEWAY_PLATFORMS:
+            from tui_gateway.server import _with_session_toolsets
+            return _with_session_toolsets(selected, platform)
+        return selected
     if platform in TUI_GATEWAY_PLATFORMS:
         from tui_gateway.server import _load_enabled_toolsets
         return list(_load_enabled_toolsets(platform) or [])
@@ -128,20 +142,26 @@ def _enabled_toolsets(platform: str) -> list[str]:
     return sorted(_get_platform_tools(load_config(), platform))
 
 
-def _render_surface(home: Path, platform: str, model: str, code: bool) -> tuple[dict[str, str], dict]:
+def _render_surface(home: Path, platform: str, model: str, code: bool, dispatcher: bool = False) -> tuple[dict[str, str], dict]:
     from hermes_cli.config import load_config, save_config
     from agent.system_prompt import build_system_prompt_parts
     from run_agent import AIAgent
 
     cfg = load_config()
     cfg["model"] = {**(cfg.get("model") or {}), "default": model}
+    if not dispatcher:
+        # A control row: the same install with dispatcher mode switched off (the coding rows cannot dispatch
+        # anyway: their posture pins the profile's coding_context).
+        cfg["dispatcher"] = {**(cfg.get("dispatcher") or {}), "enabled": False}
+    elif "dispatcher" in cfg:
+        cfg["dispatcher"] = {**cfg["dispatcher"], "enabled": True}
     save_config(cfg)  # tool schemas that track the main model read config, not the agent
     cwd = home / ("code" if code else "plain")
     os.chdir(cwd)
     agent = AIAgent(
         model=model, api_key="inspect-only", base_url="https://openrouter.ai/api/v1",
         quiet_mode=True, save_trajectories=False, platform=platform, skip_context_files=True,
-        session_id=SESSION_ID, enabled_toolsets=_enabled_toolsets(platform),
+        session_id=SESSION_ID, enabled_toolsets=_enabled_toolsets(platform, dispatcher),
     )
     tiers = {tier: _scrub(text, home) for tier, text in build_system_prompt_parts(agent).items()}
     tools = json.loads(_scrub(json.dumps(agent.tools), home))
@@ -161,8 +181,9 @@ def _render_child(out: Path) -> int:
     sync_skills(quiet=True)
 
     prompts, tools_by_surface = {}, {}
-    for surface, platform, family, code in SURFACES:
-        prompts[surface], tools_by_surface[surface] = _render_surface(home, platform, MODELS[family], code)
+    for surface, platform, family, code, dispatcher in SURFACES:
+        prompts[surface], tools_by_surface[surface] = _render_surface(
+            home, platform, MODELS[family], code, dispatcher)
     if failures.failures:
         print("\n".join(failures.failures), file=sys.stderr)
         return 1

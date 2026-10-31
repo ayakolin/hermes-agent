@@ -1,4 +1,70 @@
 {
+  "cli-classic.claude": {
+    "prompt_tokens": {
+      "context": 0,
+      "stable": 1225,
+      "volatile": 1268
+    },
+    "tool_tokens": 11242,
+    "tools": [
+      "browser_cdp",
+      "browser_dialog",
+      "browser_exec",
+      "clarify",
+      "delegate_task",
+      "execute_code",
+      "manage_connections",
+      "memory",
+      "patch",
+      "read_file",
+      "search_files",
+      "skill_manage",
+      "skill_view",
+      "skills_list",
+      "terminal",
+      "text_to_speech",
+      "tool_call",
+      "tool_describe",
+      "tool_search",
+      "vision_analyze",
+      "web_extract",
+      "web_search",
+      "write_file"
+    ]
+  },
+  "cli-code-classic.claude": {
+    "prompt_tokens": {
+      "context": 134,
+      "stable": 1829,
+      "volatile": 1268
+    },
+    "tool_tokens": 11242,
+    "tools": [
+      "browser_cdp",
+      "browser_dialog",
+      "browser_exec",
+      "clarify",
+      "delegate_task",
+      "execute_code",
+      "manage_connections",
+      "memory",
+      "patch",
+      "read_file",
+      "search_files",
+      "skill_manage",
+      "skill_view",
+      "skills_list",
+      "terminal",
+      "text_to_speech",
+      "tool_call",
+      "tool_describe",
+      "tool_search",
+      "vision_analyze",
+      "web_extract",
+      "web_search",
+      "write_file"
+    ]
+  },
   "cli-code.claude": {
     "prompt_tokens": {
       "context": 134,
@@ -35,133 +101,69 @@
   "cli.claude": {
     "prompt_tokens": {
       "context": 0,
-      "stable": 1225,
-      "volatile": 1268
+      "stable": 1493,
+      "volatile": 190
     },
-    "tool_tokens": 11242,
+    "tool_tokens": 3212,
     "tools": [
-      "browser_cdp",
-      "browser_dialog",
-      "browser_exec",
-      "clarify",
       "delegate_task",
-      "execute_code",
-      "manage_connections",
       "memory",
-      "patch",
       "read_file",
       "search_files",
-      "skill_manage",
-      "skill_view",
-      "skills_list",
-      "terminal",
-      "text_to_speech",
       "tool_call",
       "tool_describe",
-      "tool_search",
-      "vision_analyze",
-      "web_extract",
-      "web_search",
-      "write_file"
+      "tool_search"
     ]
   },
   "cli.gemini": {
     "prompt_tokens": {
       "context": 0,
-      "stable": 1646,
-      "volatile": 1266
+      "stable": 1915,
+      "volatile": 188
     },
-    "tool_tokens": 11242,
+    "tool_tokens": 3212,
     "tools": [
-      "browser_cdp",
-      "browser_dialog",
-      "browser_exec",
-      "clarify",
       "delegate_task",
-      "execute_code",
-      "manage_connections",
       "memory",
-      "patch",
       "read_file",
       "search_files",
-      "skill_manage",
-      "skill_view",
-      "skills_list",
-      "terminal",
-      "text_to_speech",
       "tool_call",
       "tool_describe",
-      "tool_search",
-      "vision_analyze",
-      "web_extract",
-      "web_search",
-      "write_file"
+      "tool_search"
     ]
   },
   "cli.gpt": {
     "prompt_tokens": {
       "context": 0,
-      "stable": 2420,
-      "volatile": 1264
+      "stable": 2599,
+      "volatile": 186
     },
-    "tool_tokens": 11398,
+    "tool_tokens": 3212,
     "tools": [
-      "browser_cdp",
-      "browser_dialog",
-      "browser_exec",
-      "clarify",
       "delegate_task",
-      "execute_code",
-      "manage_connections",
       "memory",
-      "patch",
       "read_file",
       "search_files",
-      "skill_manage",
-      "skill_view",
-      "skills_list",
-      "terminal",
-      "text_to_speech",
       "tool_call",
       "tool_describe",
-      "tool_search",
-      "vision_analyze",
-      "web_extract",
-      "web_search",
-      "write_file"
+      "tool_search"
     ]
   },
   "cli.hermes": {
     "prompt_tokens": {
       "context": 0,
-      "stable": 1225,
-      "volatile": 1268
+      "stable": 1493,
+      "volatile": 189
     },
-    "tool_tokens": 11242,
+    "tool_tokens": 3212,
     "tools": [
-      "browser_cdp",
-      "browser_dialog",
-      "browser_exec",
-      "clarify",
       "delegate_task",
-      "execute_code",
-      "manage_connections",
       "memory",
-      "patch",
       "read_file",
       "search_files",
-      "skill_manage",
-      "skill_view",
-      "skills_list",
-      "terminal",
-      "text_to_speech",
       "tool_call",
       "tool_describe",
-      "tool_search",
-      "vision_analyze",
-      "web_extract",
-      "web_search",
-      "write_file"
+      "tool_search"
     ]
   },
   "cron.claude": {
@@ -200,101 +202,53 @@
   "desktop.claude": {
     "prompt_tokens": {
       "context": 0,
-      "stable": 1473,
-      "volatile": 1269
+      "stable": 1742,
+      "volatile": 191
     },
-    "tool_tokens": 11898,
+    "tool_tokens": 3868,
     "tools": [
-      "browser_cdp",
-      "browser_dialog",
-      "browser_exec",
-      "clarify",
       "delegate_task",
-      "execute_code",
-      "manage_connections",
       "memory",
-      "patch",
       "react_to_message",
       "read_file",
       "search_files",
-      "skill_manage",
-      "skill_view",
-      "skills_list",
-      "terminal",
-      "text_to_speech",
       "tool_call",
       "tool_describe",
-      "tool_search",
-      "vision_analyze",
-      "web_extract",
-      "web_search",
-      "write_file"
+      "tool_search"
     ]
   },
   "discord.claude": {
     "prompt_tokens": {
       "context": 0,
-      "stable": 1244,
-      "volatile": 1269
+      "stable": 1512,
+      "volatile": 191
     },
-    "tool_tokens": 11242,
+    "tool_tokens": 3212,
     "tools": [
-      "browser_cdp",
-      "browser_dialog",
-      "browser_exec",
-      "clarify",
       "delegate_task",
-      "execute_code",
-      "manage_connections",
       "memory",
-      "patch",
       "read_file",
       "search_files",
-      "skill_manage",
-      "skill_view",
-      "skills_list",
-      "terminal",
-      "text_to_speech",
       "tool_call",
       "tool_describe",
-      "tool_search",
-      "vision_analyze",
-      "web_extract",
-      "web_search",
-      "write_file"
+      "tool_search"
     ]
   },
   "telegram.claude": {
     "prompt_tokens": {
       "context": 0,
-      "stable": 1276,
-      "volatile": 1269
+      "stable": 1545,
+      "volatile": 191
     },
-    "tool_tokens": 11242,
+    "tool_tokens": 3212,
     "tools": [
-      "browser_cdp",
-      "browser_dialog",
-      "browser_exec",
-      "clarify",
       "delegate_task",
-      "execute_code",
-      "manage_connections",
       "memory",
-      "patch",
       "read_file",
       "search_files",
-      "skill_manage",
-      "skill_view",
-      "skills_list",
-      "terminal",
-      "text_to_speech",
       "tool_call",
       "tool_describe",
-      "tool_search",
-      "vision_analyze",
-      "web_extract",
-      "web_search",
-      "write_file"
+      "tool_search"
     ]
   }
 }

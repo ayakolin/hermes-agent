@@ -48,7 +48,9 @@ def test_summary_names_the_surface_and_tool_that_changed(tmp_path):
     base = prompt_surface.SNAPSHOT
     head = tmp_path / "head"
     shutil.copytree(base, head)
-    prompt = head / "prompts" / "cli.claude.txt"
+    # A surface that stays classic: a dispatcher row carries the dispatcher brief instead of "Finishing
+    # the job", and its toolset has no write_file schema of its own to edit.
+    prompt = head / "prompts" / "cli-classic.claude.txt"
     text = prompt.read_text(encoding="utf-8-sig")
     prompt.write_text(text.replace("# Finishing the job", "# Finish every job"), encoding="utf-8")
     tool = head / "tools" / "write_file.json"
@@ -57,6 +59,6 @@ def test_summary_names_the_surface_and_tool_that_changed(tmp_path):
 
     summary = prompt_surface.summarize(base, head)
 
-    assert "| cli.claude |" in summary and "+# Finish every job" in summary
+    assert "| cli-classic.claude |" in summary and "+# Finish every job" in summary
     assert "`write_file`: description +" in summary
     assert prompt_surface.summarize(base, base) == ""
