@@ -209,9 +209,12 @@ async def test_a_later_reasoning_command_replaces_the_pick_after_a_restart(home,
 
 @pytest.mark.asyncio
 async def test_follow_session_runs_the_profiles_current_toolsets_and_a_frozen_one_does_not(home):
-    """C03 (main #124211): ``hermes tools disable`` reaches a following Bot Chat's next turn."""
+    """C03 (main #124211): ``hermes tools disable`` reaches a following Bot Chat's next turn.
+
+    ``dispatcher.enabled: false``: a following session is the control. A dispatcher session's toolsets are
+    frozen at creation and never follow the profile (``test_session_policy_dispatcher.py``)."""
     from gateway.session_policy import active_policy, policy_for_source, policy_scope
-    _profile(home, 'old', 1, 'k')
+    _profile(home, 'old', 1, 'k', dispatcher={'enabled': False})
     store, runner, authority, owner = _owner(home)
     try:
         follow = await _create_bot_chat(owner, authority, home, 'follow-tools')
