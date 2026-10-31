@@ -329,7 +329,24 @@ def automation_display_metadata(metadata):
 # proof at execution from the target the pre-claim check validated, and the turn's resolver reads it.
 _AUTOMATION_METADATA = frozenset({'gateway_session_key', 'gateway_session_id', 'automation_identities',
     'turn_author', 'notification_origin', 'original_trigger_message_id', 'notification_category',
-    'display_kind', 'display_text', 'gateway_proven_session_id', 'gateway_completion_ids', 'heartbeat_tick'})
+    'display_kind', 'display_text', 'gateway_proven_session_id', 'gateway_completion_ids', 'heartbeat_tick',
+    'automation_lane'})
+
+# The lanes a producer's notice can name. "completion" is an async-delegation result: its turn answers a finished
+# job, so a chat platform shows it typing (session_producer_lifecycle._open). A heartbeat/loop/kanban wake names
+# none and never types.
+AUTOMATION_LANES = frozenset({'completion'})
+
+
+def automation_lane_metadata(metadata, *, key='automation_lane'):
+    """Validate a producer's lane; ``{}`` for every wake that is not a completion. Read from the event
+    metadata (``automation_lane``) at admission and from the stored descriptor (``lane``) on restore."""
+    lane = metadata.get(key)
+    if lane is None:
+        return {}
+    if lane not in AUTOMATION_LANES:
+        raise RuntimeStoreError('invalid_params')
+    return {'lane': lane}
 
 
 def admission_display(payload):
@@ -367,7 +384,7 @@ def snapshot_automation(authority, adapter, event, identity):
             or set(event.metadata) - _AUTOMATION_METADATA):
         raise RuntimeStoreError('invalid_params')
     notification = (automation_notification_metadata(event.metadata) | automation_display_metadata(event.metadata)
-                    | _tick_metadata(event.metadata))
+                    | _tick_metadata(event.metadata) | automation_lane_metadata(event.metadata))
     entry = _owner(runner, event, authority)
     from gateway.session_detached import detached_route_of
     if event.source.platform == Platform.LOCAL or detached_route_of(event.source):
@@ -454,6 +471,7 @@ def snapshot_local_automation(authority, adapter, event, identity, entry):
     descriptor.update(automation_notification_metadata(event.metadata))
     descriptor.update(automation_display_metadata(event.metadata))
     descriptor.update(_tick_metadata(event.metadata))
+    descriptor.update(automation_lane_metadata(event.metadata))
     if event.metadata.get('turn_author') is not None:
         from agent.turn_author import parse_turn_author
         descriptor['turn_author'] = parse_turn_author(event.metadata['turn_author'])
@@ -500,13 +518,24 @@ def restore_local_automation(authority, ref, row):
         event.metadata['turn_author'] = deepcopy(descriptor['turn_author'])
     if descriptor.get('heartbeat'):
         event._heartbeat_session_id = descriptor['heartbeat']
+    if lane := automation_lane_metadata(descriptor, key='lane'):
+        event.metadata['automation_lane'] = lane['lane']
     return event
 
 
 async def admit_automation(authority, adapter, event, identity, replaces=None):
-    """``replaces``: a queued automation row of the same session this input supersedes (a liveness
+    """Admit a trusted producer's notice as an automation turn.
+
+    A completion (``event.metadata['automation_lane'] == 'completion'``) also registers with the executor
+    lifecycle at commit, so its turn types on a chat platform while it runs, like any other turn
+    (``session_producer_lifecycle``); a heartbeat/loop/kanban wake keeps the plain admission.
+
+    ``replaces``: a queued automation row of the same session this input supersedes (a liveness
     tick carrying the output of the one still waiting). Its cancellation commits in this admission's
     own transaction, so neither lands without the other."""
+    completion_lane = event.metadata.get('automation_lane') == 'completion'
+    if completion_lane:
+        from gateway.session_producer_lifecycle import mark_producer_admission
     authority._require_admission_open()
     payload, entry = snapshot_automation(authority, adapter, event, identity)
     from gateway.session_authority import LiveSession
@@ -522,6 +551,11 @@ async def admit_automation(authority, adapter, event, identity, replaces=None):
     from functools import partial
     from gateway.session_runtime_workers import tracked_write
     admitted, replaced = partial(authority._admitted, ref, event), []
+    if completion_lane:
+        def admitted(row, admitted=admitted):
+            if (tracked := admitted(row)) is not None:
+                mark_producer_admission(authority, event, row)
+            return tracked
     if replaces is not None:
         def admitted(row, admitted=admitted):
             if replaced:  # the guard ran in the committed write; an exact replay runs no guard

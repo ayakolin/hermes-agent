@@ -173,6 +173,10 @@ def _watch_notification_metadata(evt: dict, source) -> dict[str, Any]:
         metadata["gateway_proven_session_id"] = proven_session_id
     if completion_ids := evt.get("completion_ids"):
         metadata["gateway_completion_ids"] = list(completion_ids)
+    if evt.get("type") == "async_delegation":
+        # The completion lane: its turn types on a chat platform while it runs
+        # (session_producer_lifecycle._open); heartbeat/watch turns never name a lane.
+        metadata["automation_lane"] = "completion"
     return metadata
 
 

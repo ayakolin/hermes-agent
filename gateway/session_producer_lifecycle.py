@@ -30,8 +30,14 @@ def _turns(authority):
 
 def mark_producer_admission(authority, event, row):
     """``SessionAuthority._admitted``, in the commit's own tracked task: a producer's freshly queued
-    row is the executor's to bracket. A re-send of a row already running or settled is not marked."""
-    if getattr(event, '_producer_delivery', False) and row['status'] == 'queued':
+    row is the executor's to bracket. A re-send of a row already running or settled is not marked.
+
+    A completion-lane automation row (an async-delegation result) is bracketed too, for TYPING ONLY
+    (``_open``): its turn answers a finished job, and a chat platform that shows typing for every other
+    turn made the completion turn look dead. A producer delivery keeps its processing hooks."""
+    fresh = row['status'] == 'queued'
+    completion = getattr(event, '_producer_delivery', False) or event.metadata.get('automation_lane') == 'completion'
+    if fresh and completion:
         _turns(authority).setdefault(row['admission_id'], None)
 
 
@@ -61,7 +67,8 @@ class _Bracket:
 
 async def _open(authority, row, event):
     """The bracket of a producer-admitted row starting to execute, else None: an adapter that
-    renders neither typing nor the processing hooks (a webhook) is left alone."""
+    renders neither typing nor the processing hooks (a webhook) is left alone. A completion-lane
+    automation row gets typing only: it is not a producer delivery, so its hooks stay off."""
     turns = _turns(authority)
     if row['admission_id'] not in turns:
         return None
@@ -69,7 +76,7 @@ async def _open(authority, row, event):
     from gateway.run_turn_followup_ack import _followup_processing_hooks_apply
     adapter = authority.runner._adapter_for_source(event.source)
     typing = adapter is not None and type(adapter).send_typing is not BasePlatformAdapter.send_typing
-    hooks = _followup_processing_hooks_apply(adapter, event)
+    hooks = getattr(event, '_producer_delivery', False) and _followup_processing_hooks_apply(adapter, event)
     if not (typing or hooks):
         turns.pop(row['admission_id'], None)
         return None

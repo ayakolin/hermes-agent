@@ -1,7 +1,7 @@
 # gateway/ — messaging gateway, adapters, delivery
 
-Applies on top of the root `AGENTS.md`. Long-form: `website/docs/developer-guide/gateway-internals.md`.
-New platform adapter: follow `gateway/platforms/ADDING_A_PLATFORM.md` step by step.
+Applies on top of the root `AGENTS.md`. Long-form: `gateway-internals.md`.
+New platform: follow `gateway/platforms/ADDING_A_PLATFORM.md`.
 
 ## Shape
 
@@ -62,16 +62,7 @@ MagicMock adapters in older tests auto-create truthy attributes.
 (`run_notifications.py::arm_process_watcher`) that starts a new turn on completion; verbosity is
 `display.background_process_notifications`. Injection requires the `admit_internal_event` receipt
 (a handler returning None is not acceptance); refused admission refunds every claimed batch sibling
-without spending an attempt. Long form: `website/docs/developer-guide/gateway-internals.md`
-§ Background process notifications.
-
-The idle consumer of `completion_queue` (`run_notifications_wake.py::_async_delegation_watcher`) is woken
-by the put, not polled: `WakingQueue.put` notifies `process_registry.completion_wake`, the watcher waits
-`delegation.completion_batch_window_seconds` so completions that land together become one turn, then makes
-one pass over a single `take_ready` snapshot (watch events routed, async completions delivered per route,
-a process `completion` dropped). A consumer's own retry uses `process_registry_wake.requeue`, never a
-notifying `put` (it would wake the consumer that just requeued); every refusal requeue passes `wake_in=` so a
-parked watcher is woken at the retry time. Tests bound the watcher by patching `_park_until_completion`.
+without spending an attempt.
 
 Canonical local CLI/TUI/Desktop sessions admit completion and watch events into the same durable
 FIFO as human input (private launch policy, `internal_notification` display kind); observers never
@@ -83,7 +74,7 @@ own or consume those turns, and an interrupted started turn stays unknown and pa
 broadcast surfaces) and binds the WHOLE install's `providers.nous`, so shared gateways must set
 `allow_admin_from`. It drains `anon_auth.run_sign_in` on its private single-worker `_login_executor`
 (never the shared pool), allows one attempt per process, and on completion evicts agents still on
-`nous/welcome` instead of writing a model override. Long form: `gateway-internals.md` § `/login`.
+`nous/welcome` rather than writing a model override.
 
 ## Gateway lifecycle vs. the Desktop app
 
