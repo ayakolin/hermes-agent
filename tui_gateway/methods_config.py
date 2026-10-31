@@ -224,6 +224,17 @@ def _cfg_get_reasoning(params):
     return {"value": effort, "display": display}
 
 
+def _cfg_get_busy(params):
+    """The mode this session's next busy input runs under: a dispatcher session defaults to the
+    redirect-first ladder (``interrupt``) and keeps its own ``/busy`` override; any other session, or a
+    request without one, reads the profile's ``display.busy_input_mode``."""
+    from agent.busy_input_local import resolve_busy_mode
+    session = _sessions.get(params.get("session_id", ""))
+    dispatch = session is not None and _session_busy_dispatch(session)
+    return {"value": resolve_busy_mode(session.get("busy_input_mode") if dispatch else None,
+                                       _load_busy_input_mode(), dispatch=dispatch)}
+
+
 def _cfg_get_fast(params):
     # `config.set fast` is session-scoped: prefer the session's live/pinned value over the
     # global key (a pre-build session keeps its pin in create_service_tier_override).
@@ -268,7 +279,7 @@ _CONFIG_GETTERS = {
     "personality": _cfg_get_personality,
     "reasoning": _cfg_get_reasoning,
     "fast": _cfg_get_fast,
-    "busy": lambda params: {"value": _load_busy_input_mode()},
+    "busy": _cfg_get_busy,
     "approval_mode": lambda params: {"value": _load_approval_mode()},
     "approvals.mode": lambda params: {"value": _load_approval_mode()},
     "details_mode": lambda params: {"value": _display_word("details_mode", "collapsed", _DETAIL_MODES)},

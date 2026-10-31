@@ -243,20 +243,77 @@ def _interrupt_busy_session(sid: str, session: dict, agent: Any) -> None:
     threading.Thread(target=interrupt, daemon=True, name=f"busy-interrupt-{sid}").start()
 
 
-def _ac_try_correction(rid, session: dict, agent: Any, method: str, plain_text: str, status: str) -> dict | None:
-    """Apply ``agent.<method>(plain_text)`` (steer/redirect); on acceptance record the correction, scrub stale
-    self-duplicates so the live turn's original text is not re-fired after settle, and return the ``status`` reply.
-    None → caller falls through to the queue path."""
+def _ac_deliver(session: dict, agent: Any, method: str, plain_text: str) -> bool:
+    """``agent.<method>(plain_text)`` (steer/redirect); on acceptance record the correction and scrub stale
+    self-duplicates so the live turn's original text is not re-fired after settle."""
     try:
         if not getattr(agent, method)(plain_text):
-            return None
+            return False
     except Exception:
-        return None
+        return False
     with session["history_lock"]:
         _record_inflight_correction(session, plain_text)
         _drop_queued_duplicates_of_inflight_user(session)
         session["last_active"] = time.time()
-    return _ok(rid, {"status": status})
+    return True
+
+
+def _ac_try_correction(rid, session: dict, agent: Any, method: str, plain_text: str, status: str) -> dict | None:
+    """Apply a steer/redirect and return the ``status`` reply. None → caller falls through to the queue path."""
+    return _ok(rid, {"status": status}) if _ac_deliver(session, agent, method, plain_text) else None
+
+
+def _ac_busy_correction(rid, session: dict, agent: Any, mode: str, plain_text: str, dispatch: bool,
+                        compressing: bool):
+    """``(reply, queue_reason)``: the reply when a steer/redirect took the text, else None for the queue path."""
+    if dispatch:
+        return _ac_dispatch_busy(rid, session, agent, mode, plain_text, compressing)
+    if plain_text and agent is not None:
+        supported = {
+            "steer": hasattr(agent, "steer"),
+            "interrupt": getattr(agent, "_supports_active_turn_redirect", False) is True and hasattr(agent, "redirect")}
+        method, status = {"steer": ("steer", "steered"), "interrupt": ("redirect", "redirected")}.get(mode, (None, None))
+        if (method and supported[mode]
+                and (resp := _ac_try_correction(rid, session, agent, method, plain_text, status)) is not None):
+            return resp, ""
+    return None, ""
+
+
+def _session_busy_dispatch(session: dict) -> bool:
+    """True for a dispatcher session on ``dispatcher.busy.policy: dispatch``: its busy input runs the
+    redirect -> steer -> queue ladder (``agent.busy_input``) and never hard-interrupts. The flag is frozen at
+    session creation; the policy is read inside the session's own profile (``prompt.submit`` is unscoped)."""
+    from agent.busy_input_local import dispatch_policy_applies, frozen_dispatcher
+    if not frozen_dispatcher(session, session.get("agent")):
+        return False
+    with _session_profile_runtime_scope(session, hydrate_secrets=False):
+        return dispatch_policy_applies(_load_cfg(), True)
+
+
+def _ac_dispatch_busy(rid, session: dict, agent: Any, mode: str, plain_text: str, compressing: bool):
+    """The dispatcher ladder for a busy prompt: ``(reply, reason)``. ``reply`` is set when redirect or steer
+    took the text; None sends the caller to the FIFO queue, with ``reason`` saying why. A False from
+    ``redirect()`` falls to ``steer()`` instead of the queue (no model request in flight is ordinary). The
+    legacy wire has no 'maybe delivered' answer, so a Codex native redirect that timed out queues, as before."""
+    from agent.busy_input import BusyFacts
+    from agent.busy_input_local import (
+        DECLINED, MAYBE, TAKEN, DISPOSITION, native_steer, plan_for_mode, run_ladder, supports_redirect)
+    facts = BusyFacts(has_text=bool(plain_text), compressing=compressing, agent_building=agent is None,
+                      redirect_supported=agent is not None and supports_redirect(agent))
+    attempts = {}
+    if agent is not None:
+        def redirect():
+            if _ac_deliver(session, agent, "redirect", plain_text):
+                return TAKEN
+            return MAYBE if native_steer(agent) else DECLINED
+        attempts = {"redirect": redirect,
+                    "steer": lambda: TAKEN if hasattr(agent, "steer") and _ac_deliver(
+                        session, agent, "steer", plain_text) else DECLINED}
+    outcome = run_ladder(plan_for_mode(mode, facts), attempts)
+    if outcome.verb == "queue":
+        return None, outcome.reason
+    status = {"redirect": "redirected", "steer": "steered"}[outcome.verb]
+    return _ok(rid, {"status": status, "disposition": DISPOSITION[outcome.verb]}), ""
 
 
 def _session_compression_in_flight(session: dict) -> bool:
@@ -403,12 +460,17 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
     and drop sends): ``interrupt`` (default) → redirect, falling back to hard interrupt + queue; ``queue`` → queue only;
     ``steer`` → inject after the current atomic action. ``queued=True`` (client queue drain) forces queue mode: a "run
     after" message must NEVER become a live correction."""
-    mode = "queue" if queued else _load_busy_input_mode()
+    from agent.busy_input_local import resolve_busy_mode
+    dispatch = not queued and _session_busy_dispatch(session)
+    mode = "queue" if queued else resolve_busy_mode(session.get("busy_input_mode"), _load_busy_input_mode(),
+                                                    dispatch=dispatch)
     agent = session.get("agent")
     # Compression in flight demotes steer/interrupt to queue: a correction delivered
     # mid-compression aborts the compression instead of waiting for it (#61042). The
-    # follow-up drains when compression finishes — the Discord-gateway contract.
-    if mode in ("steer", "interrupt") and _session_compression_in_flight(session):
+    # follow-up drains when compression finishes — the Discord-gateway contract. A dispatcher session
+    # hands the fact to its ladder, which queues for the same reason.
+    compressing = mode in ("steer", "interrupt") and _session_compression_in_flight(session)
+    if compressing and not dispatch:
         mode = "queue"
     with session["history_lock"]:
         if not session.get("running"):
@@ -420,15 +482,10 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
             session["attached_images"] = []  # claim now so a later paste isn't consumed when the turn yields
     plain_text = _coerce_message_text(text).strip() if not image_paths and _is_text_only_busy_payload(text) else ""
     # Text-only corrections steer/redirect in place when supported; media payloads and older agents fall through to
-    # the proven interrupt + queue path.
-    if plain_text and agent is not None:
-        supported = {
-            "steer": hasattr(agent, "steer"),
-            "interrupt": getattr(agent, "_supports_active_turn_redirect", False) is True and hasattr(agent, "redirect")}
-        method, status = {"steer": ("steer", "steered"), "interrupt": ("redirect", "redirected")}.get(mode, (None, None))
-        if (method and supported[mode]
-                and (resp := _ac_try_correction(rid, session, agent, method, plain_text, status)) is not None):
-            return resp
+    # the proven interrupt + queue path (a dispatcher session: straight to the queue, never an interrupt).
+    reply, queue_reason = _ac_busy_correction(rid, session, agent, mode, plain_text, dispatch, compressing)
+    if reply is not None:
+        return reply
     # Queue before asking the live turn to stop. Never call a provider/compute-host method under history_lock: an
     # interrupt can wait behind the op it cancels.
     with session["history_lock"]:
@@ -449,9 +506,11 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
     # ``AIAgent._pending_steer``) and fall-through queue envelopes (payload not steerable, ``steer()``
     # rejected/raised). A hard interrupt here kills the live turn AND ``AIAgent.interrupt()`` drops the
     # pending steer buffer — silently destroying the earlier messages of the burst. See #86134.
-    if mode == "interrupt" and not image_paths:
+    if mode == "interrupt" and not image_paths and not dispatch:
         _interrupt_busy_session(sid, session, agent)
-    return _ok(rid, {"status": "queued"})
+    # A dispatcher reply says why the text waited: ``queued`` alone cannot tell a compression hold from a steer.
+    why = {"disposition": "queued_next_turn", "reason": queue_reason} if dispatch else {}
+    return _ok(rid, {"status": "queued", **why})
 
 
 def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:

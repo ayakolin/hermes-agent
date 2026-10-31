@@ -147,7 +147,8 @@ def _correction_method(name: str, verb: str, accepted_status: str, supported, un
         if verb == "redirect" and agent is None and session.get("running"):
             _enqueue_prompt(session, text, current_transport() or _stdio_transport)
             session["last_active"] = time.time()
-            return _ok(rid, {"status": "queued", "text": text})
+            return _ok(rid, {"status": "queued", "text": text, "disposition": "queued_next_turn",
+                             "reason": "agent_building"})
         # Compression in flight: queue instead of steering/redirecting. A correction that
         # reaches the provider mid-compression aborts the compression (explicit_interrupt)
         # — the follow-up kills the turn that would answer it (#61042). Queued here, it
@@ -156,14 +157,25 @@ def _correction_method(name: str, verb: str, accepted_status: str, supported, un
         if _session_compression_in_flight(session):
             _enqueue_prompt(session, text, current_transport() or _stdio_transport)
             session["last_active"] = time.time()
-            return _ok(rid, {"status": "queued", "text": text})
+            return _ok(rid, {"status": "queued", "text": text, "disposition": "queued_next_turn",
+                             "reason": "compression_in_flight"})
         if not supported(agent):
             return _err(rid, 4010, unsupported)
         # An idle agent accepts steer() but only the next turn drains it, spliced after an old tool
         # row (#64578). 'rejected' makes the client queue it as a normal next prompt.
         if verb == "steer" and not session.get("running"):
             return _ok(rid, {"status": "rejected", "text": text})
-        return _apply_correction(rid, session, verb, text, accepted_status)
+        reply = _apply_correction(rid, session, verb, text, accepted_status)
+        # A dispatcher session's declined redirect (no model request in flight) falls to steer, as its
+        # prompt.submit ladder does; the client then sees a 'queued'/'steered' answer, not a refusal.
+        from agent.busy_input_local import native_steer
+        if (verb == "redirect" and reply.get("result", {}).get("status") == "rejected" and session.get("running")
+                and _session_busy_dispatch(session) and hasattr(agent, "steer") and not native_steer(agent)):
+            steered = _apply_correction(rid, session, "steer", text, "queued")
+            if steered.get("result", {}).get("status") == "queued":
+                steered["result"]["disposition"] = "steered"
+                return steered
+        return reply
 
 
 # Inject text into the next tool result without interrupting (AIAgent.steer(): no new user turn, no role

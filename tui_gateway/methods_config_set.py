@@ -239,7 +239,12 @@ def _set_fast(rid, params, key, value, session):
 
 def _set_busy(rid, params, key, value, session):
     if _word(value) in {"", "status"}:
-        return _kv(rid, key, _load_busy_input_mode())
+        return _kv(rid, key, _cfg_get_busy(params)["value"])
+    # A dispatcher session's ladder is not a user preference: ``/busy`` there is this session's override and
+    # never rewrites display.busy_input_mode (every other session's mode, and the ``inherit`` fallback).
+    if session is not None and _session_busy_dispatch(session) and _word(value) in {"queue", "steer", "interrupt"}:
+        session["busy_input_mode"] = _word(value)
+        return _kv(rid, key, _word(value))
     return _set_word(rid, params, key, value, session)
 
 
