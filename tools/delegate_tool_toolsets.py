@@ -75,14 +75,20 @@ def _blocked_toolsets_for_role(role: str) -> list[str]:
     )
 
 def _resolve_child_toolsets(
-    parent_agent, toolsets: Optional[list[str]], effective_role: str
+    parent_agent, toolsets: Optional[list[str]], effective_role: str, *, executor_baseline=None,
 ) -> tuple[list[str], list[str]]:
     """``(enabled_toolsets, disabled_toolsets)`` for a child. Children never gain tools the parent lacks: explicit
     ``toolsets`` are intersected with the parent's (composite-expanded) set, else the parent's enabled set is
-    inherited. Blocked tools are stripped twice — whole blocked toolsets here, and exact one-tool deny toolsets via
+    inherited. The one exception is a dispatcher session's executor: with ``executor_baseline`` (only
+    ``_build_children`` passes it, from a frozen dispatcher parent) and no explicit ``toolsets``, the child gets
+    the configured baseline inside the session ceiling (``agent/executor_baseline.py``). Blocked tools are stripped
+    twice — whole blocked toolsets here, and exact one-tool deny toolsets via
     ``disabled_toolsets`` so blocked names inside mixed bundles (hermes-cli) are subtracted AFTER composite
     expansion and survive registry refreshes. Orchestrators get ``delegation`` re-added unconditionally
     (role-granted, not inherited)."""
+    if executor_baseline is not None and not toolsets:
+        from agent.executor_baseline import baseline_child_toolsets
+        return baseline_child_toolsets(parent_agent, executor_baseline)
     # enabled_toolsets=None means "all tools", so derive from loaded tool names.
     parent_enabled = getattr(parent_agent, "enabled_toolsets", None)
     if parent_enabled is not None:

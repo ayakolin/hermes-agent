@@ -230,6 +230,8 @@ def _build_child_agent(
     override_reasoning_effort: Any = None,
     profile_home: Optional[Path] = None,
     override_service_tier: Optional[str] = None,  # a route's checked speed tier (tools/delegate_tool_tuning.py)
+    # A dispatcher session's executor baseline (agent/executor_baseline.py), passed by _build_children only.
+    executor_baseline=None,
 ):
     """Build (don't run) a child AIAgent on the main thread. override_* (from delegation config) replace parent
     inheritance so children can run on a different provider:model pair. ``profile_home`` builds (and later runs,
@@ -239,10 +241,13 @@ def _build_child_agent(
     from agent.delegation_context import delegated_child_context
     from tools.delegate_tool_routes import delegated_profile_scope
     # Role is depth-derived: a child may delegate iff the kill switch is on and
-    # depth budget remains below max_spawn_depth. The `role` arg is ignored.
+    # depth budget remains below max_spawn_depth. The `role` arg is ignored. An executor is always a leaf.
     child_depth = getattr(parent_agent, "_delegate_depth", 0) + 1
     max_spawn = _get_max_spawn_depth()
-    effective_role = "orchestrator" if _get_orchestrator_enabled() and child_depth < max_spawn else "leaf"
+    effective_role = (
+        "orchestrator" if _get_orchestrator_enabled() and child_depth < max_spawn and executor_baseline is None
+        else "leaf"
+    )
 
     # One subagent_id shared by the progress callback, spawn_requested event and
     # the live registry; parent_id is set when THIS parent is itself a subagent.
@@ -253,10 +258,11 @@ def _build_child_agent(
     # global. Only fallback policy follows the owner of a per-call route such
     # as auxiliary.review.
     delegation_cfg = _load_config()
-    child_toolsets, child_disabled_toolsets = _resolve_child_toolsets(parent_agent, toolsets, effective_role)
+    child_toolsets, child_disabled_toolsets = _resolve_child_toolsets(
+        parent_agent, toolsets, effective_role, executor_baseline=executor_baseline)
     child_prompt = _build_child_system_prompt(
         goal, context, workspace_path=_resolve_workspace_hint(parent_agent), role=effective_role,
-        max_spawn_depth=max_spawn, child_depth=child_depth,
+        max_spawn_depth=max_spawn, child_depth=child_depth, executor=executor_baseline is not None,
     )
     parent_api_key = getattr(parent_agent, "api_key", None)
     if (not parent_api_key) and hasattr(parent_agent, "_client_kwargs"):
@@ -329,6 +335,7 @@ def _build_child_agent(
     child_session_ref["session_id"] = getattr(child, "session_id", "") or ""
     child._progress_identity_ref = child_session_ref
     child._delegate_depth, child._delegate_role = child_depth, effective_role  # post-degrade role
+    child._executor_child = executor_baseline is not None  # child_profile_scope binds the approval gate's executor mark
     child._subagent_id, child._parent_subagent_id = subagent_id, parent_subagent_id
     _apply_child_compression_cap(child, delegation_cfg)
     # Ownership chain for action=list/steer/stop; weakref so a finished parent
@@ -453,9 +460,12 @@ def _build_children(
 ) -> tuple[list[tuple], Optional[str]]:
     """Build every child on the main thread (construction is not thread-safe), each on its task's route;
     ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure."""
+    from agent.executor_baseline import executor_baseline_for
     from tools.delegation_live_log import wrap_progress_callback
     from tools.delegation_output_schema import append_output_contract
     children = []
+    # A dispatcher parent's children are executors; any other parent keeps "a child never exceeds its parent".
+    baseline_kwargs = {"executor_baseline": b} if (b := executor_baseline_for(parent_agent)) is not None else {}
     for i, t in enumerate(task_list):
         route = routes[i]
         if route.error:
@@ -470,6 +480,7 @@ def _build_children(
                 toolsets=None,  # always inherit the parent's toolsets
                 model=route.creds["model"], max_iterations=max_iterations, task_count=len(task_list),
                 parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **_route_overrides(route),
+                **baseline_kwargs,
             )
         except ValueError as exc:
             # An owner refusal can land mid-batch: the siblings built so far hold reservations.

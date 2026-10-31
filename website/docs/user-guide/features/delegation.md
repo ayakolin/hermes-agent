@@ -374,7 +374,7 @@ Credentials resolve exactly like a `delegation.provider` pin (full runtime-provi
 
 ## Inherited Tool Access
 
-`delegate_task` does not accept a model-facing `toolsets` parameter. Each subagent inherits the parent's enabled toolsets so the model cannot grant a child capabilities that the parent does not have. Configure the parent's tools before starting the conversation if delegated work needs additional capabilities.
+`delegate_task` does not accept a model-facing `toolsets` parameter. Each subagent inherits the parent's enabled toolsets so the model cannot grant a child capabilities that the parent does not have. Configure the parent's tools before starting the conversation if delegated work needs additional capabilities. The one exception is a dispatcher session's executors, which start from a configured baseline instead (see [Dispatcher executors](#dispatcher-executors)).
 
 Certain tools are blocked for subagents even when the parent has them:
 - `delegate_task` — blocked for leaf subagents (the default). Retained for `role="orchestrator"` children, bounded by `max_spawn_depth` — see [Depth Limit and Nested Orchestration](#depth-limit-and-nested-orchestration) below.
@@ -384,6 +384,33 @@ Certain tools are blocked for subagents even when the parent has them:
 - `cronjob` — no scheduling more work in the parent's name
 
 Both roles retain `execute_code` (programmatic tool calling) so children can batch mechanical work.
+
+## Dispatcher executors
+
+A dispatcher session keeps a narrow tool set and hands long work to background subagents, so a child cannot inherit the tools it needs from its parent. For the `delegate_task` children of a dispatcher session only, the tool surface comes from trusted config, never from the model:
+
+```yaml
+delegation:
+  executor:
+    toolsets: [terminal, file, web, browser, code_execution, vision, image_gen, skills, todo, session_search]
+    mcp: all          # all (MCP servers enabled in the profile) | none | [server names]
+```
+
+- **Names are validated.** Only built-in, single-purpose toolsets are accepted. Plugin and MCP names, `hermes-*` bundles, client-surface or platform-gated toolsets, and anything holding a blocked or kanban tool are dropped with a warning. A list that ends up empty stays empty. The `executor` toolset is added by code and cannot be listed.
+- **The session ceiling caps it.** A baseline toolset applies only if every tool in it is inside what the operator allows the session: `platform_toolsets.<platform>`, a hosted-room execution policy, and the platform's MCP allowlist. A Telegram profile limited to `web` gets web-only executors.
+- **Everything else still applies.** `delegate_task`, `clarify`, `memory`, `cronjob` and the kanban tools stay blocked, executors are always leaves, and the parent's `agent.disabled_toolsets` still removes tools (so a Blank Slate profile that disables `web` or `browser` has no web or browser executors). A dispatcher must narrow its own tools with `enabled_toolsets` only: anything it puts in `disabled_toolsets` is inherited by its executors too.
+- **Frozen per agent.** The baseline is resolved once, the first time the dispatcher agent delegates (or when the session builder freezes it earlier), and is read in the session's profile. A rebuilt agent (cache eviction, resume) re-reads the config.
+- **Model.** Executors use `delegation.model` / `delegation.provider` like any child. A child pinned by model alone gets no parent fallback chain, so declare `delegation.fallback_providers` as well.
+
+Other parents (ordinary sessions, an executor's own children, the plugin subagent lifecycle API) keep the inherit-from-parent rule, and so does a `toolsets` value inside a task: it is ignored.
+
+### Asking the user: `needs_input`
+
+An executor cannot ask the user anything. When it cannot go on, it calls `needs_input` (`kind`: `question`, `approval` or `blocked`; `question`; up to four `options`; `detail`) once. The call ends the executor's run immediately, with no further model call, and the result reaches the dispatcher as `status: completed` with a `needs_input` block. The completion text marks the task `NEEDS INPUT` and tells the dispatcher to relay the question and not answer it itself. A finished subagent cannot be resumed, so the dispatcher starts a new executor with the original goal, the work so far and the user's answer.
+
+### Approvals
+
+A dangerous command that needs approval pauses the executor while a card can reach the user. If no approver is available (a chat platform's notifier lives for one turn, and a dispatcher's turn is short), the executor gets a definite `no_approver` refusal instead of a pending approval nobody reads, and is told to call `needs_input` with `kind: approval`. A user's "yes" to that question does not approve the command for the next executor: the same command is refused again until the user runs it themselves or changes how approvals work. Other delegated children keep today's behaviour. `delegation.subagent_auto_approve` stays `false`.
 
 ## Max Iterations
 

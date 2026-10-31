@@ -177,13 +177,22 @@ _NESTED_CHILDREN_NOTE = (
     "from the nesting depth; children at the maximum depth cannot delegate further. No parameter override is available."
 )
 
+_EXECUTOR_NEEDS_INPUT_NOTE = (
+    "\n## Working unattended\n"
+    "Nobody is watching you work and you cannot ask the user anything in conversation. If you cannot continue "
+    "without the user (a decision only they can make, information only they hold, or a command that was refused "
+    "because nobody can approve it), call `needs_input` exactly once with a precise question, naming in the same "
+    "message what you finished and what is left. That call ends your run. Do not guess, do not repeat it, and do "
+    "not call it for anything you can work out yourself."
+)
+
 def _build_child_system_prompt(
     goal: str, context: Optional[str] = None, *, workspace_path: Optional[str] = None, role: str = "leaf",
-    max_spawn_depth: int = 2, child_depth: int = 1,
+    max_spawn_depth: int = 2, child_depth: int = 1, executor: bool = False,
 ) -> str:
     """Focused system prompt for a child agent. role='orchestrator' appends a delegation-capability block (modeled on
     OpenClaw's buildSubagentSystemPrompt); its depth note is literal truth grounded in the passed config so the LLM
-    can't confabulate nesting."""
+    can't confabulate nesting. ``executor`` (a dispatcher session's child) adds the ``needs_input`` note."""
     # The goal is the child's first user turn (see ``_ChildRun.await_child``).
     # Keeping it out of the system prompt avoids sending OAuth Anthropic the
     # same task in both roles, while preserving the normal user-turn contract.
@@ -209,6 +218,8 @@ def _build_child_system_prompt(
         if _ctx_files.strip():
             parts.append(_CONTEXT_FILES_INTRO + _ctx_files.strip())
     parts.append(_COMPLETION_INSTRUCTIONS)
+    if executor:
+        parts.append(_EXECUTOR_NEEDS_INPUT_NOTE)
     if role == "orchestrator":
         child_note = _LEAF_CHILDREN_NOTE if child_depth + 1 >= max_spawn_depth else _NESTED_CHILDREN_NOTE
         parts.append(

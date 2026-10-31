@@ -146,11 +146,18 @@ def delegated_profile_scope(home: Any) -> Iterator[None]:
         yield
 
 
-def child_profile_scope(child: Any) -> contextlib.AbstractContextManager:
-    """The profile scope a built child's own work runs in (its startup credential lease, every conversation turn
-    incl. the output_schema retry); a no-op for children without a profile route. Parent bookkeeping (registry,
-    heartbeat, progress, result assembly) stays outside it."""
-    return delegated_profile_scope(getattr(child, "_delegate_profile_home", None))
+@contextlib.contextmanager
+def child_profile_scope(child: Any) -> Iterator[None]:
+    """The scope a built child's own work runs in (its startup credential lease, every conversation turn incl. the
+    output_schema retry): its profile route's scope, and for a dispatcher session's executor the executor mark that
+    the approval gate reads. A no-op for a child with neither. Parent bookkeeping (registry, heartbeat, progress,
+    result assembly) stays outside it."""
+    from agent.delegation_context import executor_child_context
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(delegated_profile_scope(getattr(child, "_delegate_profile_home", None)))
+        if getattr(child, "_executor_child", False) is True:
+            stack.enter_context(executor_child_context())
+        yield
 
 
 def _profile_model_request(cfg: Mapping[str, Any]) -> dict[str, Any]:
