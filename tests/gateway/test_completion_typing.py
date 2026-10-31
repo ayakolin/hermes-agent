@@ -108,6 +108,39 @@ async def test_the_stored_lane_comes_back_on_the_executing_event(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_a_completion_admission_reports_its_commit_to_the_executor_bracket(tmp_path, monkeypatch):
+    """``admit_automation`` registers a completion-lane row at commit (the bracket types it); a heartbeat
+    wake is not registered."""
+    from gateway import session_automation as automation
+    from gateway.session_producer_lifecycle import _turns
+    from hermes_state_runtime import list_session_admissions
+
+    runner, authority, adapter, source, metadata = await _native_owner(tmp_path, monkeypatch, "human-1")
+    try:
+        for lane in ("completion", None):
+            evt = _completion(metadata["gateway_session_key"], "async_delegation" if lane else "heartbeat")
+            evt.update({**metadata, "session_id": "proc-1", "event_id": f"evt-{lane or 'wake'}",
+                        "started_at": 1.0, "output": "READY", "seq": 1})
+            notice_metadata = {"gateway_session_key": metadata["gateway_session_key"],
+                               "gateway_session_id": metadata["gateway_session_id"]}
+            if lane:
+                notice_metadata["automation_lane"] = lane
+            await automation.admit_process_notice(
+                runner, authority, adapter,
+                MessageEvent(text="n", source=source, internal=True, metadata=notice_metadata), evt)
+
+        turns = _turns(authority)
+        owner = authority.logical_owner(metadata["gateway_session_id"])
+        rows = {_automation_descriptor(row["payload"]).get("lane"): row
+                for row in list_session_admissions(authority.db, session_id=owner, pending_only=False)}
+        assert rows["completion"]["admission_id"] in turns, "the completion row is bracketed (typing)"
+        assert "completion" in rows and None in rows
+        assert rows[None]["admission_id"] not in turns, "a heartbeat wake is not a typing turn"
+    finally:
+        authority.db.close()
+
+
+@pytest.mark.asyncio
 async def test_a_completion_report_is_written_with_the_completion_lane():
     """The producer side: an async-delegation notice names the lane, a process/watch notice does not."""
     from gateway.run_notifications import _watch_notification_metadata
