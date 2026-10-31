@@ -76,6 +76,20 @@ async def test_compression_in_flight_is_answered_from_the_transcript_snapshot_an
 
 
 @pytest.mark.asyncio
+async def test_a_background_notification_turn_is_not_described_as_the_users_words(tmp_path, monkeypatch):
+    fork = FakeFork()
+    async with rig(tmp_path, monkeypatch, LANE, StandInAgent()) as r:
+        await _prepare(r, monkeypatch, fork)
+        r.turn.event.internal = True
+        r.turn.event.text = '[async delegation complete] machine text'
+        assert await r.handle(r.event('are you stuck?')) is False
+        await async_wait_until(lambda: _interim(r), timeout=10, what='the quick reply')
+        question = fork.calls[0][0]
+        assert 'background notification' in question and 'machine text' not in question
+        await _lane_idle(r)
+
+
+@pytest.mark.asyncio
 async def test_a_message_the_turn_already_took_gets_no_late_reply(tmp_path, monkeypatch):
     fork = FakeFork(hold=True)
     async with rig(tmp_path, monkeypatch, LANE, StandInAgent()) as r:

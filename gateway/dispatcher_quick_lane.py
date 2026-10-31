@@ -167,8 +167,11 @@ def _status_block(session_key: str, runner) -> str:
     state = runner._peek_session_state(session_key)
     turn = state.turn if state is not None else None
     lines = ["Live status of the main thread (it is running right now):"]
-    if opener := getattr(getattr(turn, "event", None), "text", ""):
-        lines.append(f"- It is working on the user's earlier message: \"{_clip(opener)}\"")
+    opener = getattr(turn, "event", None)
+    if getattr(opener, "internal", False):  # a wake or completion turn: its text is machine text, not the user's
+        lines.append("- It is handling a background notification, not a message from the user.")
+    elif text := getattr(opener, "text", ""):
+        lines.append(f"- It is working on the user's earlier message: \"{_clip(text)}\"")
     if turn is not None and turn.started_ts:
         lines.append(f"- It has been running for {int(time.time() - turn.started_ts)} seconds.")
     activity = getattr(getattr(turn, "agent", None), "get_activity_summary", None)
