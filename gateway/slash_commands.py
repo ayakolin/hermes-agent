@@ -854,6 +854,31 @@ class GatewaySlashCommandsMixin(
             media_urls=list(event.media_urls or []), media_types=list(event.media_types or [])))
         return t("gateway.background.started", preview=_preview(prompt), task_id=task_id)
 
+    async def _side_question_inputs(self, source, *, require_history: bool = True):
+        """``((transcript snapshot, main_runtime), None)`` for a side question about *source*'s chat, or
+        ``(None, refusal reply)``. Shared by /btw and the dispatcher's quick lane, which passes
+        ``require_history=False`` (the message it answers is not in the transcript yet)."""
+        session_entry = await self.async_session_store.get_or_create_session(source)
+        try:
+            history = await self.async_session_store.load_transcript(session_entry.session_id)
+        except TranscriptReadError:
+            return None, history_unreadable()
+        if not history and require_history:
+            return None, t("gateway.btw.no_history")
+        try:
+            model, rt = self._resolve_session_agent_runtime(source=source)
+        except Exception:
+            logger.warning("Side question: could not resolve the session's runtime", exc_info=True)
+            model, rt = None, {}
+        if not rt.get("api_key"):
+            return None, t("gateway.btw.no_provider")
+        main_runtime = {
+            "model": model,
+            **{k: rt.get(k) for k in ("provider", "base_url", "api_key", "api_mode")},
+            "session_id": session_entry.session_id,
+        }
+        return (list(history or []), main_runtime), None
+
     async def _handle_btw_command(self, event: MessageEvent) -> str:
         """Handle /btw <question> — one-shot auxiliary LLM call on a transcript snapshot; live history
         is never touched (alternation + prompt cache intact, current turn keeps running). Unlike /bg,
@@ -862,25 +887,10 @@ class GatewaySlashCommandsMixin(
         if not question:
             return t("gateway.btw.usage")
         source = event.source
-        session_entry = await self.async_session_store.get_or_create_session(source)
-        try:
-            history = await self.async_session_store.load_transcript(session_entry.session_id)
-        except TranscriptReadError:
-            return history_unreadable()
-        if not history:
-            return t("gateway.btw.no_history")
-        try:
-            model, rt = self._resolve_session_agent_runtime(source=source)
-        except Exception:
-            model, rt = None, {}
-        if not rt.get("api_key"):
-            return t("gateway.btw.no_provider")
-        main_runtime = {
-            "model": model,
-            **{k: rt.get(k) for k in ("provider", "base_url", "api_key", "api_mode")},
-            "session_id": session_entry.session_id,
-        }
-        history_snapshot = list(history)
+        inputs, refusal = await self._side_question_inputs(source)
+        if inputs is None:
+            return refusal
+        history_snapshot, main_runtime = inputs
         # Prefer the cache-parity fork when a live cached AIAgent exists: it replays the snapshot
         # against the warm provider prefix cache, giving FULL context at cache-read prices. With no
         # cached agent the cache is cold anyway — answer_side_question's digest fallback handles it.

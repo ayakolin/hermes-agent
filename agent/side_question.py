@@ -100,13 +100,13 @@ def _side_question_task_config() -> dict[str, Any]:
 
 
 def _answer_via_fork(parent_agent: Any, question: str, history: Optional[list[dict[str, Any]]],
-                     on_fork: Optional[Callable[[Any], None]] = None) -> str:
+                     on_fork: Optional[Callable[[Any], None]] = None, framing: Optional[str] = None) -> str:
     """Answer via a cache-parity fork of ``parent_agent`` on the calling thread.
 
     An empty thread-scoped tool whitelist denies every tool call at dispatch: ``tools[]``
     stays byte-identical for cache parity, but the side question can never mutate anything.
     ``on_fork(fork)`` publishes the built fork so an owner can interrupt it, and
-    ``on_fork(None)`` follows its teardown.
+    ``on_fork(None)`` follows its teardown. ``framing`` replaces the /btw rules the question is wrapped in.
     """
     from agent.background_review import _digest_history, build_cache_parity_fork, release_cache_parity_fork
     from hermes_cli.plugins import clear_thread_tool_whitelist, set_thread_tool_whitelist
@@ -120,7 +120,7 @@ def _answer_via_fork(parent_agent: Any, question: str, history: Optional[list[di
             "Side question (/btw) denied tool call: {tool_name}. "
             "Tools are disabled here — answer directly from the conversation context."))
         snapshot = trim_snapshot_for_fork(history)
-        result = fork.run_conversation(user_message=f"{_FORK_PROMPT}\n\nSide question: {question}",
+        result = fork.run_conversation(user_message=f"{framing or _FORK_PROMPT}\n\nSide question: {question}",
                                        conversation_history=_digest_history(snapshot) if routed else snapshot)
         answer = (result or {}).get("final_response", "") or ""
         if not answer and result and result.get("error"):
@@ -133,7 +133,8 @@ def _answer_via_fork(parent_agent: Any, question: str, history: Optional[list[di
             on_fork(None)
 
 
-def _answer_via_oneshot(question: str, history: Optional[list[dict[str, Any]]], **run_kwargs: Any) -> str:
+def _answer_via_oneshot(question: str, history: Optional[list[dict[str, Any]]], *,
+                        framing: Optional[str] = None, **run_kwargs: Any) -> str:
     """Fallback: answer from a rendered transcript digest in one aux call."""
     from agent.oneshot import run_oneshot
 
@@ -141,28 +142,30 @@ def _answer_via_oneshot(question: str, history: Optional[list[dict[str, Any]]], 
         f"Conversation transcript (snapshot):\n-----\n{render_history_for_side_question(history)}\n-----\n\n"
         f"Side question: {question}"
     )
-    return run_oneshot(instructions=_ONESHOT_INSTRUCTIONS, user_input=user_input, task=SIDE_QUESTION_TASK, **run_kwargs)
+    return run_oneshot(instructions=framing or _ONESHOT_INSTRUCTIONS, user_input=user_input, task=SIDE_QUESTION_TASK, **run_kwargs)
 
 
 def answer_side_question(
     question: str, history: Optional[list[dict[str, Any]]], *, parent_agent: Any = None,
     main_runtime: Optional[dict[str, Any]] = None, max_tokens: int = 2048, temperature: Optional[float] = 0.3,
     timeout: float = 180.0, on_fork: Optional[Callable[[Any], None]] = None,
-    should_stop: Optional[Callable[[], bool]] = None,
+    should_stop: Optional[Callable[[], bool]] = None, framing: Optional[str] = None,
 ) -> str:
     """Fork when ``parent_agent`` is live, else (or on empty answer / failure) the one-shot
     digest. Raises on failure — callers surface the error on their own UI.
 
     ``on_fork`` receives the fork once built (and ``None`` after its teardown) so the caller can
-    interrupt it; ``should_stop()`` true after the fork skips the one-shot fallback."""
+    interrupt it; ``should_stop()`` true after the fork skips the one-shot fallback. ``framing`` replaces the
+    /btw rules in both paths (the dispatcher's quick lane answers a different question than /btw does)."""
     question = (question or "").strip()
     if not question:
         raise ValueError("answer_side_question requires a non-empty question")
 
     if parent_agent is not None:
         try:
-            answer = (_answer_via_fork(parent_agent, question, history, on_fork) if on_fork is not None
-                      else _answer_via_fork(parent_agent, question, history))
+            extra = {"framing": framing} if framing is not None else {}
+            answer = (_answer_via_fork(parent_agent, question, history, on_fork, **extra) if on_fork is not None
+                      else _answer_via_fork(parent_agent, question, history, **extra))
             if answer:
                 return answer
             logger.warning("/btw fork returned an empty answer; falling back to one-shot")
@@ -171,5 +174,5 @@ def answer_side_question(
     if should_stop is not None and should_stop():
         raise RuntimeError("side question stopped")
 
-    return _answer_via_oneshot(question, history, main_runtime=main_runtime, max_tokens=max_tokens,
-                               temperature=temperature, timeout=timeout)
+    return _answer_via_oneshot(question, history, framing=framing, main_runtime=main_runtime,
+                               max_tokens=max_tokens, temperature=temperature, timeout=timeout)
