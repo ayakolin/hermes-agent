@@ -21,6 +21,21 @@ export function claimCardRow(sessionId: string, admissionId: string): boolean {
   return true
 }
 
+/** The notification card an admitted automation turn's `message.start` carries (`display_kind` /
+ *  `display_text`, `gateway.session_automation.admission_display`). Null for an ordinary typed turn, and for
+ *  an admission whose card this process already drew. */
+export function admissionCard(ev: { admission_id?: null | string; payload?: unknown; session_id?: null | string }): null | string {
+  const payload = ev.payload as { display_kind?: unknown; display_text?: unknown } | undefined
+  const kind = payload?.display_kind
+  const display = payload?.display_text
+
+  if (typeof kind !== 'string' || !kind || typeof display !== 'string' || !display.trim() || !ev.admission_id) {
+    return null
+  }
+
+  return claimCardRow(ev.session_id ?? '', ev.admission_id) ? display.trim() : null
+}
+
 export function resetCardRows(): void {
   drawn.clear()
 }

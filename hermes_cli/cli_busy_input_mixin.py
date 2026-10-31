@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import queue
-import threading
 import time
 
 from agent.i18n import t
@@ -146,17 +145,19 @@ class CLIBusyInputMixin:
             with open(_hermes_home / "interrupt_debug.log", "a", encoding="utf-8") as f:
                 f.write(f"{time.strftime('%H:%M:%S')} ENTER: queued interrupt msg={str(payload)[:60]!r}, "
                         f"agent_running={self._agent_running}\n")
-        except Exception:  # health: allow BLE001 -- the debug log is best effort
-            pass
+        except OSError as exc:  # the debug trail is best effort: a read-only home must not break Enter
+            logger.debug("interrupt debug log unavailable: %s", exc)
 
     # -- the serial worker ---------------------------------------------------------------------
     def _busy_worker_submit(self, item):
         """Append to the worker's FIFO (never blocks the key thread) and make sure it runs."""
         if getattr(self, "_busy_worker", None) is None:
+            from agent.memory_provider import spawn_context_thread
             self._busy_worker = queue.Queue()
-            self._busy_worker_thread = threading.Thread(
-                target=self._busy_worker_loop, args=(self._busy_worker,),
-                name="hermes-cli-busy", daemon=True)
+            # spawn_context_thread, not threading.Thread: the worker delivers prompts for this CLI's
+            # profile, and ContextVars (profile scope, approval callbacks) do not cross a bare thread.
+            self._busy_worker_thread = spawn_context_thread(
+                self._busy_worker_loop, name="hermes-cli-busy", args=(self._busy_worker,))
             self._busy_worker_thread.start()
         self._busy_worker.put(item)
 

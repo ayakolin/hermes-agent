@@ -249,7 +249,8 @@ def _ac_deliver(session: dict, agent: Any, method: str, plain_text: str) -> bool
     try:
         if not getattr(agent, method)(plain_text):
             return False
-    except Exception:
+    except Exception:  # health: allow BLE001 -- the caller queues the text instead of losing it
+        logger.debug("%s failed; the prompt queues instead", method, exc_info=True)
         return False
     with session["history_lock"]:
         _record_inflight_correction(session, plain_text)

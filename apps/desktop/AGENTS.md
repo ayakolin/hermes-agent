@@ -63,6 +63,10 @@ overwrites newer intent (generation counters, request tokens); only the foregrou
 into the shared view; coalesce cosmetic updates but flush terminal transitions; keep reference
 identity on no-ops.
 
+Cautionary example: the composer's busy policy. `config.get busy` is the authority (the owner resolves it,
+dispatcher sessions included). An unloaded policy (`null`) means queue — never a dead Send (the old null
+branch returned true having neither sent nor cleared the draft) and never an unintended interrupt.
+
 ## Switching context is a re-home, not a reboot
 
 A connection/mode apply is a SOFT re-home (shell stays, gateway-bound stores wiped explicitly, then

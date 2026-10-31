@@ -502,6 +502,10 @@ You can also change it inside the CLI:
 The first time you press Enter while Hermes is working, Hermes prints a one-line reminder explaining the `/busy` knob. It only fires once per install; `onboarding.seen.busy_input_prompt` in `config.yaml` records that it was shown. Delete that key to see the tip again.
 :::
 
+#### Dispatcher sessions
+
+A dispatcher session decides busy input server-side: the owner resolves a redirect → steer → queue ladder instead of reading `display.busy_input_mode`, so your message never waits behind a long turn and never hard-interrupts it. When the redirect declines (no model request in flight), the message is steered into the running turn; if nothing can take it, it is queued as the next turn. The CLI keeps the mode the owner reports (`config.get busy`) and routes the ordered RPCs through a worker thread, so Enter never freezes on a slow correction. `/busy <mode>` in a dispatcher session changes that session only and never rewrites `display.busy_input_mode`.
+
 ### Suspending to Background
 
 On Unix systems, press **`Ctrl+Z`** to suspend Hermes to the background — just like any terminal process. The shell prints a confirmation:

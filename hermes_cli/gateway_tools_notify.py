@@ -91,11 +91,18 @@ def queue_admitted_turn(cli, store) -> None:
         state.admitted_turn = {"admission_id": params["admission_id"], "text": card["text"],
                                "execution_generation": params.get("execution_generation")}
         state.missed_cards.pop(params["admission_id"], None)  # painted now, nothing to recover
-        row = TimelineNotification(card["text"], card["display_text"], card["display_kind"],
-                                   card.get("notification_category") or "result")
-        row.admission_id = params["admission_id"]
-        _put_first(cli._pending_input, row)
+        _put_first(cli._pending_input, _card_row(params["admission_id"], card))
         return
+
+
+def _card_row(admission_id, card):
+    """The ``◈`` row main's input path paints for an admitted notification turn, tagged with its admission so
+    an idle tick can tell its own recovered row from a stale header."""
+    from tools.process_registry_notifications import TimelineNotification
+    row = TimelineNotification(card["text"], card["display_text"], card["display_kind"],
+                               card.get("notification_category") or "result")
+    row.admission_id = admission_id
+    return row
 
 
 def _adopt(cli, state, adopted, text):
@@ -124,16 +131,11 @@ def _recovered_turn_pending(cli, state) -> bool:
     """A notification turn recovered from its receipt is still waiting for the input loop: its
     ``admitted_turn`` must survive the next tick's reset (which only clears a stale header)."""
     adopted = getattr(state, "admitted_turn", None)
-    if not adopted or not adopted.get("recovered"):
-        return False
     pending = getattr(cli, "_pending_input", None)
-    if pending is None:
+    if not adopted or not adopted.get("recovered") or pending is None:
         return False
     with pending.mutex:
-        for item in pending.queue:
-            if getattr(item, "admission_id", None) == adopted.get("admission_id"):
-                return True
-    return False  # it ran (or was dropped): the entry is stale
+        return any(getattr(item, "admission_id", None) == adopted.get("admission_id") for item in pending.queue)
 
 
 _NEVER_RAN = {"cancelled", "rejected"}

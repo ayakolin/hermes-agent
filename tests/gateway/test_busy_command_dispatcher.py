@@ -23,7 +23,7 @@ def _wire(monkeypatch, policy):
     monkeypatch.setattr(session_policy, 'policy_for_source', lambda runner, source: policy)
     writes = []
     monkeypatch.setattr('cli.save_config_value', lambda key, value: writes.append((key, value)) or True)
-    monkeypatch.setattr(gateway_run, '_load_gateway_config', lambda: {})
+    monkeypatch.setattr(gateway_run, '_load_gateway_config', dict)
     return live, writes
 
 

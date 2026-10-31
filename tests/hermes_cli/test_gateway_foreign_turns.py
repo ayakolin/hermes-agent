@@ -75,7 +75,7 @@ def test_a_still_running_admission_is_adopted_without_a_receipt():
     from hermes_cli.gateway_foreign_turns import recover_automation
     receipts = {}
     receipts["adm-9"] = {"status": "started", "execution_generation": 9}
-    conn, cli, client = _cli(receipts)
+    conn, cli, _client = _cli(receipts)
     try:
         _drop_start(cli, conn)
         recover_automation(cli, cli._session_db)

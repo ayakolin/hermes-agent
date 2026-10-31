@@ -42,7 +42,7 @@ def _session(agent, dispatcher=True, **extra):
 def _env(monkeypatch):
     monkeypatch.setattr(server, "_load_busy_input_mode", lambda: "queue")  # display.busy_input_mode says queue
     monkeypatch.setattr(server, "_session_compression_in_flight", lambda session: False)
-    monkeypatch.setattr(server, "_load_cfg", lambda: {})
+    monkeypatch.setattr(server, "_load_cfg", dict)
     interrupted = []
     monkeypatch.setattr(server, "_interrupt_busy_session", lambda *a: interrupted.append(a))
     return interrupted

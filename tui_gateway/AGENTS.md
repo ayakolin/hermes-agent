@@ -177,6 +177,20 @@ mutation, approval/secret slash shortcuts, and lifecycle commands. Use the exist
 available. Catalog presence alone does not imply execution support. No legacy
 fallback is installed on the canonical transport.
 
+## Busy submits on a dispatcher session
+
+`session_auto_continue._handle_busy_submit` resolves a session's mode with
+`agent.busy_input_local.resolve_busy_mode` (a dispatcher session: the redirect-first ladder, never
+`display.busy_input_mode`, and `_interrupt_busy_session` is never called) and walks
+`_ac_dispatch_busy`'s ladder; `session.steer` / `session.redirect` fall a declined redirect to steer when
+`_session_busy_dispatch` says so. The `session['dispatcher']` flag is frozen at creation (written by the dispatcher-mode package); the policy
+is read inside the session's own profile scope. Replies carry
+optional `disposition` / `reason` (queued_next_turn + compression_in_flight / agent_building /
+steer_declined). `config.get/set busy` are session-scoped for such a session (`/busy` there never writes
+`display.busy_input_mode`). Ink draws an automation turn's `message.start` card once per admission and keeps
+a still-running child row across `idle()`/`startMessage()` (`turnController.reconcileSubagents` prunes rows a
+roster snapshot no longer lists).
+
 ## Canonical native projections
 
 `gateway/session_config.py` exposes profile-authorized `config.get` presentation
