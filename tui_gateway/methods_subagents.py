@@ -12,6 +12,8 @@ method = _registry.method
 _SUBAGENT_SNAPSHOT_FIELDS = (
     "subagent_id", "parent_id", "depth", "goal", "delegation_id", "model",
     "started_at", "status", "tool_count", "last_tool", "accepting_steer",
+    # A dispatcher session's task has no child yet while it waits: phase/place in line describe it instead.
+    "phase", "queue_position", "queued_at",
 )
 _SUBAGENT_TAIL_BYTES = 16384
 
@@ -80,7 +82,7 @@ def _failed_delegations(session_id, owner):
 
 @method("subagent.interrupt")
 def _(rid, params):
-    from agent.interrupt_compat import request_hard_interrupt
+    from tools.delegate_tool_registry import interrupt_record
 
     subagent_id = _str_param(params, "subagent_id")
     if not subagent_id:
@@ -91,14 +93,9 @@ def _(rid, params):
         return _err(rid, 4001, "session not found or not owned by this transport")
     record = next((r for r in _owned_subagent_records(session_id, transport, owner)
                    if r.get("subagent_id") == subagent_id), None)
-    agent = record.get("agent") if record else None
-    # Interrupt the authorized object, never re-resolve a globally recyclable id.
-    found = False
-    if agent is not None:
-        try:
-            found = bool(request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"))
-        except Exception:
-            logger.debug("subagent interrupt failed", exc_info=True)
+    # Act on the authorized record, never a re-resolved global id: its child is hard-interrupted, a task that has no
+    # child yet (queued, or still being built) is cancelled through its own cancel_fn.
+    found = bool(record) and interrupt_record(record, f"Interrupted via TUI ({subagent_id})")
     return _ok(rid, {"found": found, "subagent_id": subagent_id})
 
 

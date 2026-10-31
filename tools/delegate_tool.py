@@ -469,12 +469,12 @@ def _build_children(
     task_list: list[dict[str, Any]], task_schemas: list[Optional[dict[str, Any]]], routes: list[Any], *,
     top_role: str, max_iterations: int, parent_agent,
     live_deleg_id: Optional[str], live_writers: list, task_images: Optional[list[Optional[list[str]]]] = None,
-    only: Optional[int] = None, child_extra: Optional[dict[str, Any]] = None,
+    only: Optional[int] = None, child_extra: Optional[dict[str, Any]] = None, cancel=None,
 ) -> tuple[list[tuple], Optional[str]]:
     """Build every child on the main thread (construction is not thread-safe), each on its task's route;
-    ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure. ``only`` builds just that task and
-    ``child_extra`` adds ``_build_child_agent`` kwargs (a deferred unit building one child on a pool thread). A
-    dispatcher parent's executor baseline is resolved by agent/executor_baseline.py."""
+    ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure. ``only`` builds just that task,
+    ``child_extra`` adds ``_build_child_agent`` kwargs, and ``cancel`` lets a stopped deferred unit leave the lock
+    queue. A dispatcher parent's executor baseline is resolved by agent/executor_baseline.py."""
     from agent.executor_baseline import executor_baseline_for
     from tools.delegation_live_log import wrap_progress_callback
     from tools.delegation_output_schema import append_output_contract
@@ -495,7 +495,7 @@ def _build_children(
                 toolsets=None,  # always inherit the parent's toolsets
                 model=route.creds["model"], max_iterations=max_iterations, task_count=len(task_list),
                 parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **_route_overrides(route),
-                **{**(child_extra or {}), **baseline_kwargs},
+                **{**(child_extra or {}), **baseline_kwargs}, cancel=cancel,
             )
         except ValueError as exc:
             # An owner refusal can land mid-batch: the siblings built so far hold reservations.
@@ -552,6 +552,68 @@ def _settle_refused_transcripts(refused: list[dict[str, Any]], live_deleg_id: Op
             with _quiet("Live transcript finalize failed", exc_info=True):
                 _writer.finalize(entry)
     update_manifest_statuses(live_deleg_id, refused, home=live_home, completed=False)
+
+
+def _max_iterations() -> int:
+    """``delegation.max_iterations`` (authoritative for children; see ``delegate_task``)."""
+    return _load_config().get("max_iterations", DEFAULT_MAX_ITERATIONS)
+
+
+def dispatcher_deferred(parent_agent: Any) -> bool:
+    """Whether this call takes the deferred path: a dispatcher session (the flag is frozen at session creation) whose
+    results have a later consumer. Everything else — other sessions, one-shot, cron, stateless channels, orchestrator
+    children — keeps the old path byte for byte."""
+    from agent.dispatcher_session import agent_is_dispatcher
+    if not agent_is_dispatcher(parent_agent) or getattr(parent_agent, "_delegate_depth", 0) > 0:
+        return False
+    from tools.delegate_tool_dispatch import _resolve_async_wake_sid
+    wake_sid, _, _, _, history_delivery = _capture_origin()
+    return _resolve_async_wake_sid(
+        wake_sid, history_delivery, oneshot_session=getattr(parent_agent, "_oneshot_session", None) is True) is not None
+
+
+def _dispatch_deferred(task_list, task_schemas, task_images, routes, runnable, refused, parent_agent) -> str:
+    """Dispatcher-session dispatch: validate capacity now, publish placeholders, and build children on the pool.
+    ``delegate_task`` returns here, before any child exists — a full queue is a tool error, never a synchronous run."""
+    from tools import async_delegation_queue as queue
+    from tools.delegate_tool_deferred import _DeferredCall, _new_call_id
+    from tools.delegate_tool_dispatch import _BACKGROUND_NOTES, _announce_batch, _capture_origin, _resolve_async_session_key
+    from hermes_cli.backend_retirement import retirement
+    import json
+    origin = _capture_origin()
+    session_key, ui_session_id = _resolve_async_session_key(parent_agent, origin[1])
+    max_slots = _get_max_async_children()
+    selectors = {"session_key": session_key, "parent_session_id": getattr(parent_agent, "session_id", None),
+                 "origin_ui_session_id": ui_session_id}
+    if error := queue.preflight(selectors, max_slots):
+        return tool_error(error)
+    batch = _Batch(
+        task_list, [(i, task_list[i], None) for i in range(len(task_list))], parent_agent, _batch_creds(runnable),
+        None, top_role=_normalize_role(None), max_children=_get_max_concurrent_children(), live_deleg_id=None,
+        live_writers=[], live_paths=[], origin_wake_sid=origin[0], origin_ui_session_id=origin[1],
+        origin_owner_transport=origin[2], origin_owner_session_record=origin[3],
+        origin_session_history_delivery=origin[4], overall_start=time.monotonic(),
+        live_home=_parent_live_home(parent_agent), refused=refused, record_telemetry=False)
+    call = _DeferredCall(batch, routes, task_schemas, task_images, wake_sid=origin[0], session_key=session_key,
+                         origin_ui_session_id=ui_session_id, call_id=_new_call_id(), max_slots=max_slots)
+    call.plan()
+    _announce_batch(parent_agent, len(task_list), call.call_id)
+    # The call's own pool reservation: a submit failure surfaces here instead of leaving admitted work with no worker.
+    with retirement.work() as admitted:
+        if not admitted:
+            return tool_error("The backend is retiring; reconnect to continue.")
+        if error := call.admit():
+            return tool_error(error)
+    payload = call.payload(refused, call.units)
+    if (position := call.queued_position()) is not None:
+        payload["queued"], payload["queue_position"] = True, position
+        payload["note"] = _BACKGROUND_NOTES["queued"]
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _batch_creds(runnable) -> dict[str, Any]:
+    """Batch-level model/provider labels, blank when tasks took different routes."""
+    return runnable[0].creds if all(r.creds == runnable[0].creds for r in runnable) else dict.fromkeys(runnable[0].creds)
 
 
 def _oneshot_spawn_budget(parent_agent: Any, requested: int) -> Optional[str]:
@@ -650,6 +712,8 @@ def delegate_task(
     err = _oneshot_spawn_budget(parent_agent, len(runnable))
     if err:
         return tool_error(err)
+    if background and dispatcher_deferred(parent_agent):
+        return _dispatch_deferred(task_list, task_schemas, task_images, routes, runnable, refused, parent_agent)
 
     overall_start = time.monotonic()
     # Live transcripts: cache/delegation/live/<id>/task-<n>.log per task, a side channel with zero effect on message

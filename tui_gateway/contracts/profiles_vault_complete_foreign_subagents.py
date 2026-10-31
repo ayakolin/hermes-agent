@@ -649,6 +649,10 @@ class SubagentSnapshot(Result):
     tool_count: int | None = None
     last_tool: str | None = None
     accepting_steer: bool | None = None
+    # A dispatcher session's task has no child yet while it waits for a slot: these describe that wait instead of a run.
+    phase: str | None = None
+    queue_position: int | None = None
+    queued_at: float | None = None
 
 
 class FailedDelegation(Result):

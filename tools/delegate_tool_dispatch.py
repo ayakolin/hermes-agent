@@ -53,6 +53,12 @@ class _Batch:
     # Result entries of tasks their backend refused (no child): joined into a sync result, listed in a background
     # call's dispatch payload. Units carved for async dispatch never carry them.
     refused: list = field(default_factory=list)
+    # A deferred (dispatcher) call: the ids published for its tasks before any child existed, and its control object.
+    subagent_ids: list = field(default_factory=list)
+    control: Any = None
+    # False for a deferred call's units: its telemetry is folded per task once the whole call has finished
+    # (tools/delegate_tool_deferred.py), not per joined unit here.
+    record_telemetry: bool = True
 
     def owner_kwargs(self) -> dict[str, Any]:
         """Steer/stop authority of the originating session, passed to every child run."""
@@ -210,7 +216,8 @@ def _execute_and_aggregate(batch: _Batch, *, honor_parent_interrupt: bool = True
         results.extend(batch.refused)
         results.sort(key=lambda r: r["task_index"])
     update_manifest_statuses(batch.live_deleg_id, results, home=batch.live_home)
-    finish_delegation_unit(batch.task_list, results, background=not honor_parent_interrupt)
+    if batch.record_telemetry:
+        finish_delegation_unit(batch.task_list, results, background=not honor_parent_interrupt)
 
     combined: dict[str, Any] = {"results": results, "total_duration_seconds": total_duration}
     # Runtime truth about children's background processes, as prose the parent can't miss inside the JSON.
@@ -335,14 +342,20 @@ def _batch_progress_token(child_agents: list[Any]) -> tuple:
 _BACKGROUND_NOTES = {
     "one": (
         "Subagent is running in the background; its full result re-enters the conversation as a new message when it "
-        "finishes. Results are delivered only after you END YOUR TURN: do anything that does not depend on it, then "
-        "stop with a one-line status. Do not poll its transcript or artifacts to wait for it."
+        "finishes. Results are delivered only after you END YOUR TURN: anything you want to say about it belongs in "
+        "the sentence you write BEFORE this call (a dispatcher session's turn ends with the dispatch itself). Do not "
+        "poll its transcript or artifacts to wait for it."
     ),
     "many": (
         "{n} subagents are running in parallel in the background as {k} completion unit(s); each unit's results "
         "re-enter the conversation as their own new message when THAT unit finishes. Results are delivered only "
-        "after you END YOUR TURN: do anything that does not depend on them, then stop with a one-line status. Do not "
-        "poll transcripts or artifacts to wait for them."
+        "after you END YOUR TURN: anything you want to say about them belongs in the sentence you write BEFORE this "
+        "call (a dispatcher session's turn ends with the dispatch itself). Do not poll transcripts or artifacts to "
+        "wait for them."
+    ),
+    "queued": (
+        "Every background slot was busy, so this call waits in the queue and starts on its own as soon as one frees. "
+        "It still returns as a new message; do not re-dispatch it, and do not poll to see when it starts."
     ),
     "control_hint": (
         "While a child runs you can orchestrate it live with this same tool: delegate_task(action='list') to see live "
@@ -355,28 +368,36 @@ _BACKGROUND_NOTES = {
     ),
 }
 
-def _dispatched_payload(batch: _Batch, units: list[tuple[_Batch, str]]) -> dict:
+def _dispatched_payload(batch: _Batch, units: list[tuple[Any, str]]) -> dict:
     """Model-facing handle for an accepted background call: one entry per async unit."""
+    return _dispatched_body(
+        batch, units, n=len(batch.children), sids=[getattr(c, "_subagent_id", None) for (_, _, c) in batch.children],
+        units_of=lambda unit: [i for (i, _, _) in unit.children], live_paths=batch.live_paths)
+
+
+def _dispatched_body(batch: _Batch, units: list[tuple[Any, str]], *, n: int, sids: list, units_of, live_paths: list,
+                     extra: Optional[dict] = None) -> dict:
+    """The handle's bytes, from whatever the caller knows before running: children (the old path) or task ids (a
+    deferred dispatcher call, whose children do not exist yet)."""
     goals = [t["goal"] for t in batch.task_list]
-    n = len(batch.children)  # running children; refused tasks are listed under "refused"
     payload = {
         "status": "dispatched", "mode": "background", "count": n,
         "delegation_id": batch.live_deleg_id or units[0][1], "goals": goals,
+        **({} if extra is None else extra),
         "note": _BACKGROUND_NOTES["one"] if n == 1 else _BACKGROUND_NOTES["many"].format(n=n, k=len(units)),
     }
     if len(units) > 1:
         payload["units"] = [
-            {"delegation_id": uid, "group": unit.group, "task_indexes": [i for (i, _, _) in unit.children]}
+            {"delegation_id": uid, "group": unit.group if unit is not None else None, "task_indexes": units_of(unit)}
             for unit, uid in units
         ]
-    sids = [getattr(c, "_subagent_id", None) for (_, _, c) in batch.children]
     if any(isinstance(s, str) and s for s in sids):
         payload["subagent_ids"] = sids
         payload["control_hint"] = _BACKGROUND_NOTES["control_hint"]
     if batch.refused:
         payload["refused"] = batch.refused
-    if batch.live_paths:
-        payload["live_transcripts"] = list(batch.live_paths)
+    if live_paths:
+        payload["live_transcripts"] = list(live_paths)
         payload["live_transcripts_hint"] = _BACKGROUND_NOTES["live_transcripts_hint"]
     return payload
 

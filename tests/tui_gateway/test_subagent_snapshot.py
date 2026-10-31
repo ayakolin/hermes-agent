@@ -128,6 +128,28 @@ def test_live_tail_and_steer_share_exact_owner_and_end_with_child(runtime):
 
 
 
+def test_queued_task_without_a_child_is_listed_and_stoppable(runtime):
+    """A dispatcher task waits without a child: the roster still shows it (phase, place in line) and Stop reaches it."""
+    from tools.delegate_tool_registry import discard_placeholder, register_placeholder
+
+    server, owner, transport, call = runtime
+    cancelled = []
+    register_placeholder(
+        subagent_id="sa-queued", parent_id=None, depth=0, goal="waiting for a slot", delegation_id="deleg_q",
+        model="test", started_at=1000.0, status="queued", phase="queued", queue_position=1, tool_count=0,
+        last_tool=None, accepting_steer=True, owner_agent_session_id=None,
+        owner_session_id="ui-owner", owner_transport=transport, owner_session_record=owner,
+        cancel_fn=lambda: cancelled.append(True) or True)
+    try:
+        roster = call("subagent.list")["result"]["subagents"]
+        row = next(r for r in roster if r["subagent_id"] == "sa-queued")
+        assert row["status"] == "queued" and row["phase"] == "queued" and row["queue_position"] == 1
+        assert call("subagent.interrupt", subagent_id="sa-queued")["result"]["found"] is True
+        assert cancelled == [True]
+    finally:
+        discard_placeholder("sa-queued")
+
+
 def test_interrupt_requires_exact_live_owner_but_direct_helper_stays_legacy(runtime):
     from tools.delegate_tool_child_run import _register_child
     from tools.delegate_tool_registry import interrupt_subagent, _unregister_subagent

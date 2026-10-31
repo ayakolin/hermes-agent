@@ -16,6 +16,8 @@ from hermes_state_runtime import RuntimeStoreError
 _SUBAGENT_FIELDS = (
     'subagent_id', 'parent_id', 'depth', 'goal', 'delegation_id', 'model',
     'started_at', 'status', 'tool_count', 'last_tool', 'accepting_steer',
+    # A dispatcher session's task has no child yet while it waits: phase/place in line describe it instead.
+    'phase', 'queue_position', 'queued_at',
 )
 _TAIL_BYTES = 16384
 _PROCESS_TAIL_CHARS = 32768  # main's dock tail view (cli_process_dock.process_tail)
@@ -40,7 +42,7 @@ async def subagent_control(connection, ref, params, *, steer):
     ``subagent.list`` rule). The sidecar handler never held an authority session."""
     fields = {'session_id', 'profile', 'subagent_id'} | ({'text'} if steer else set())
     if (set(params) - fields or not ref.session_id or any(not isinstance(params.get(k), str) or not params[k]
-                                                           for k in fields - {'profile'})):
+                                                           for k in fields - {'profile', 'session_id'})):
         raise RuntimeStoreError('invalid_params')
     if ref.session_id not in connection.authority.sessions:
         raise RuntimeStoreError('not_found')
@@ -48,16 +50,14 @@ async def subagent_control(connection, ref, params, *, steer):
     live, sub = connection.authority.sessions[ref.session_id], params['subagent_id']
     with live.event_stream.lock:
         _require_current_route(connection.authority, ref)
-        child = next((r['agent'] for r in _owner_objects(connection.authority, ref)[1] if r.get('subagent_id') == sub), None)
+        record = next((r for r in _owner_objects(connection.authority, ref)[1] if r.get('subagent_id') == sub), None)
     if not steer:
-        from agent.interrupt_compat import request_hard_interrupt
-        return {'found': child is not None and bool(request_hard_interrupt(child, f'Interrupted via Desktop ({sub})')),
+        from tools import delegate_tool_registry as registry
+        # A task that has no child yet (queued, or still being built) is cancelled through its own cancel_fn.
+        return {'found': bool(record) and registry.interrupt_record(record, f'Interrupted via Desktop ({sub})'),
                 'subagent_id': sub}
     from tools import delegate_tool_registry as registry
-    with registry._active_subagents_lock:  # linearized with the child's final steer drain
-        record = registry._active_subagents.get(sub)
-        queued = bool(child is not None and record and record.get('agent') is child and record.get('accepting_steer')
-                      and child.steer(params['text']))
+    queued = bool(record) and registry.steer_authorized_record(sub, record, params['text'])
     return {'status': 'queued' if queued else 'rejected', 'subagent_id': sub, 'text': params['text']}
 
 
@@ -551,7 +551,8 @@ def _owned_by_lineage(record, target_sids, expected_db):
     if not target_sids or record.get('owner_agent_session_id') not in target_sids:
         return False
     expected_path = getattr(expected_db, 'db_path', None)
-    child_path = getattr(getattr(record.get('agent'), '_session_db', None), 'db_path', None)
+    # A task that has no child yet records its owner's db path: it has no child agent to read one from.
+    child_path = getattr(getattr(record.get('agent'), '_session_db', None), 'db_path', None) or record.get('owner_db_path')
     return expected_path is not None and child_path is not None and str(child_path) == str(expected_path)
 
 

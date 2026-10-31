@@ -51,6 +51,12 @@ def live_transcript_root(home: Optional[Path] = None) -> Path:
     return get_hermes_dir("cache/delegation", "delegation_cache", home=home) / "live"
 
 
+def task_log_path(delegation_id: str, task_index: int, home: Optional[Path] = None) -> str:
+    """Where task ``task_index``'s live transcript is written: the prediction a deferred dispatch hands the model
+    before the file exists must be the path ``LiveTranscriptWriter`` then writes."""
+    return str(live_transcript_root(home) / delegation_id / f"task-{task_index}.log")
+
+
 @contextmanager
 def _best_effort(what: str):
     """Swallow and debug-log any failure: nothing here may reach the agent loop."""
@@ -248,7 +254,7 @@ def create_live_transcripts(
     same resolved root, so pinned homes clean their own stale dirs.
     """
     n = len(task_list)
-    prune_stale_live_dirs(root=live_transcript_root(home))  # best-effort; never raises
+    _prune_live_dirs(live_transcript_root(home), delegation_id)  # best-effort; never raises
     with _best_effort("creation"):
         # Same id shape as async_delegation's so the dir name matches the handle.
         deleg_id = delegation_id or f"deleg_{uuid.uuid4().hex[:8]}"
@@ -311,7 +317,17 @@ def update_manifest_statuses(delegation_id: Optional[str],
         _dump_json(mp, manifest)
 
 
-def prune_stale_live_dirs(max_age_days: int = LIVE_RETENTION_DAYS, root: Optional[Path] = None) -> int:
+def _prune_live_dirs(root: Path, keep: Optional[str] = None) -> None:
+    """Retention sweep, never removing the call being created: a caller may pre-issue a delegation id (and hand its
+    transcript paths to the model) before the files are written."""
+    if keep:
+        prune_stale_live_dirs(root=root, keep=keep)
+    else:
+        prune_stale_live_dirs(root=root)
+
+
+def prune_stale_live_dirs(max_age_days: int = LIVE_RETENTION_DAYS, root: Optional[Path] = None,
+                          keep: Optional[str] = None) -> int:
     """Remove live/<delegation_id> dirs older than the retention window. Best-effort.
 
     ``root`` defaults to the ambient resolve; callers that pin transcripts to an
@@ -326,7 +342,7 @@ def prune_stale_live_dirs(max_age_days: int = LIVE_RETENTION_DAYS, root: Optiona
         cutoff = time.time() - max_age_days * 86400
         for child in root_dir.iterdir():
             try:
-                if child.is_dir() and child.stat().st_mtime < cutoff:
+                if child.is_dir() and child.name != keep and child.stat().st_mtime < cutoff:
                     shutil.rmtree(child, ignore_errors=True)
                     removed += 1
             except OSError:

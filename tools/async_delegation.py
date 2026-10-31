@@ -94,6 +94,9 @@ _monitor_thread: Optional[threading.Thread] = None
 _monitor_stop = threading.Event()
 
 _LIVE_STATES = {"running", "stalling", "finalizing"}
+# Why a deferred task ended without ever running (the completion vocabulary's reason, mirrored here for the unit's
+# own terminal status; tools/delegate_tool_deferred.py owns the wording).
+BEFORE_START = "stopped before it started"
 _ACTIVE_STATES = ("running", "stalling")
 # Routing origin persisted at dispatch so a restart-recovered completion can
 # reconstruct a full SessionSource (scope_id drives relay tenant egress).
@@ -108,6 +111,17 @@ _STALL_FIELD_MAP = (("_stall_quiet_seconds", "stalled_after_quiet_seconds"),
 # ── Durable ledger (state.db / async_delegations) ───────────────────────────
 def _db_path():
     return get_hermes_home() / "state.db"
+
+
+def persist_dispatch(record: dict[str, Any]) -> None:
+    """Write a dispatch's ledger row on a thread that already holds the owning profile's scope (a dispatcher unit's
+    worker). ``_persist_dispatch`` is the turn thread's entry: it snapshots routing and cwd there."""
+    _persist_dispatch(record)
+
+
+def prune_durable_records() -> None:
+    """Retention pass for the ledger (see ``_prune_durable_records``), callable from a unit's worker."""
+    _prune_durable_records()
 
 
 def _connect() -> sqlite3.Connection:
@@ -183,7 +197,10 @@ def _persist_dispatch(record: dict[str, Any]) -> None:
     except OSError:
         pass
     with _DB_LOCK, _transaction() as conn:
-        conn.execute("""INSERT OR REPLACE INTO async_delegations
+        # The dispatch row is written at most once. A deferred unit's write can arrive late (a slow ledger), after an
+        # in-memory completion already settled the row: re-INSERTing would reset it to 'running' and replay the
+        # finished unit on restart.
+        conn.execute("""INSERT OR IGNORE INTO async_delegations
                (delegation_id, origin_session, origin_ui_session_id,
                 parent_session_id, state, dispatched_at, updated_at,
                 delivery_state, delivery_attempts, owner_pid,
@@ -247,6 +264,8 @@ def record_unit_child(delegation_id: str, entry: dict[str, Any]) -> None:
             row = conn.execute("SELECT result_json FROM async_delegations WHERE delegation_id=? AND state='running'",
                                (delegation_id,)).fetchone()
             if row is None:
+                if remote := worker_ledger():
+                    remote.child(delegation_id, entry)  # no row yet: the owner's ledger records it itself
                 return
             partial = redact_child_result(json.loads(row[0] or "{}") or {})
             results = [r for r in partial.get("results") or [] if r.get("task_index") != entry.get("task_index")]
@@ -873,7 +892,7 @@ def _new_record(
     role: str, model: Optional[str], session_key: str, origin_ui_session_id: str, origin_session_id: str,
     parent_session_id: Optional[str], interrupt_fn: Optional[Callable[[], None]],
     progress_fn: Optional[Callable[[], tuple]], slot_key: Optional[str], task_transcripts: Optional[dict[str, str]],
-    task_indexes: Optional[list[int]],
+    task_indexes: Optional[list[int]], call_key: Any = None, call_settle: Optional[Callable[[list[str]], None]] = None,
 ) -> dict[str, Any]:
     """The registry record of one dispatch (not yet published). Built on the dispatching thread: the routing origin and
     the Context it captures are that thread's."""
@@ -891,6 +910,8 @@ def _new_record(
         **({"task_transcripts": dict(task_transcripts)} if task_transcripts else {}),
         # Which of the call's ``goals`` this unit runs (None = all of them).
         **({"task_indexes": list(task_indexes)} if task_indexes is not None else {}),
+        # A deferred (dispatcher) call's units share one telemetry key; the last one to finish closes the call.
+        **({"call_key": call_key, "call_settle": call_settle} if call_key is not None else {}),
         # The one stale-monitor thread serves every profile and starts with an empty Context;
         # a forced finalization runs under the dispatcher's so it settles the same state.db.
         "_context": contextvars.copy_context(),
@@ -898,7 +919,37 @@ def _new_record(
         "_progress_token": None, "_progress_ts": dispatched_at, "_interrupted_at": None}
 
 
-def _run_record(delegation_id: str, runner: Callable[[], dict[str, Any]], is_batch: bool) -> None:
+def cancel_unstarted_unit(delegation_id: str, entries: list[dict[str, Any]]) -> tuple[dict[str, Any], str] | None:
+    """Finalize a unit that will never run (every task of it was stopped before starting): its result carries the
+    given entries and the unit ends ``interrupted``. None when the unit already started (its runner owns the end)."""
+    with _records_lock:
+        record = _records.get(delegation_id)
+        if record is None or record.get("_started") or record.get("status") not in _ACTIVE_STATES:
+            return None
+        record["_started"] = True  # claimed: the worker sees no unit to run
+    result = {"results": entries, "total_duration_seconds": 0.0}
+    _finalize(delegation_id, result, "interrupted")
+    return result, "interrupted"
+
+
+def run_admitted_unit(delegation_id: str, runner: Callable[[], dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Run a unit whose record was admitted earlier (a dispatcher call's unit picked up later by its worker): the
+    stall clock starts now, the record turns running, and its settlement closes the call's telemetry exactly once.
+    Returns the unit's result, or an abort result when the unit was cancelled before it started."""
+    with _records_lock:
+        record = _records.get(delegation_id)
+        if record is None or record.get("_started") or record.get("status") not in _ACTIVE_STATES:
+            return {"results": [], "total_duration_seconds": 0.0}
+        record.update(_started=True, _progress_ts=time.time(), phase="running")
+        call_key, settle = record.get("call_key"), record.get("call_settle")
+        tasks = sorted(record.get("task_indexes") or range(len(record.get("goals") or [])))
+    _run_record(delegation_id, runner, bool(record.get("is_batch")), call_key=call_key, settle=settle, tasks=tasks)
+    return None
+
+
+def _run_record(delegation_id: str, runner: Callable[[], dict[str, Any]], is_batch: bool, *,
+                call_key: Any = None, settle: Optional[Callable[[list[str]], None]] = None,
+                tasks: Optional[list[int]] = None) -> None:
     """Worker body of every dispatch path: run the unit, classify its result, and always finalize it."""
     label = " batch" if is_batch else ""
     classify = _batch_status if is_batch else (lambda r: r.get("status") or "completed")
@@ -920,7 +971,26 @@ def _run_record(delegation_id: str, runner: Callable[[], dict[str, Any]], is_bat
         logger.exception(f"Async delegation{label} %s crashed", delegation_id)
         result = crash_result(f"{type(exc).__name__}: {exc}", round(time.time() - dispatched_at, 2))
     finally:
+        if settle is not None:
+            _settle_call_tasks(tasks or [], result, status, settle)
+            status = _unit_outcome(result, status)
         _finalize(delegation_id, result, status)
+
+
+def _unit_outcome(result: dict[str, Any], status: str) -> str:
+    """A unit whose every entry was stopped before running reports ``interrupted``, not ``error``: nothing failed."""
+    entries = result.get("results") or []
+    if entries and all((e.get("failure_reason") == BEFORE_START) or e.get("status") == "interrupted" for e in entries):
+        return "interrupted"
+    return status
+
+
+def _settle_call_tasks(tasks: list[int], result: dict[str, Any], status: str,
+                       settle: Callable[[list[str]], None]) -> None:
+    """One status per task of a deferred unit, taken from its result entries (a task the runner never produced an
+    entry for — cancelled or not built — counts as interrupted). Handed to the call's ``settle`` once per unit."""
+    by_index = {r.get("task_index"): r for r in (result.get("results") or []) if isinstance(r, dict)}
+    settle([str((by_index.get(i) or {}).get("status") or status) for i in tasks])
 
 
 def _forget_dispatch(delegation_id: str) -> None:
@@ -1016,16 +1086,33 @@ def _finalize(delegation_id: str, result: Any, status: str) -> None:
         record["completed_at"] = time.time()
         record["interrupt_fn"] = None  # drop the closure; child is done
         record["progress_fn"] = None  # stop stale-monitor sampling
+        record["_finalized"] = True
+        call_key = record.get("call_key")
         snapshot = dict(record)
         # The slot this record held is free from the status flip on: hand it to the next queued dispatcher unit in
         # the same lock hold, so a concurrent dispatch cannot be admitted ahead of the queue head.
         starts = collect_starts_locked()
+        call_done = bool(call_key) and all(
+            r.get("call_key") is call_key and r.get("_finalized") for r in _records.values() if r.get("call_key") is call_key)
     run_starts(starts)
-    _push_completion_event(snapshot, result(snapshot) if callable(result) else result, status)
+    resolved = result(snapshot) if callable(result) else result
+    if call_done:
+        _call_done(call_key)
+    _push_completion_event(snapshot, resolved, status)
     with _records_lock:
         if delegation_id in _records:
             _records[delegation_id]["status"] = status
         _prune_completed_locked()
+
+
+def _call_done(call_key: Any) -> None:
+    """Close the delegation telemetry of a deferred call: ``settle`` folds one status per task and emits the call's
+    single row once every unit has finished (a dispatcher call shares one key across its units)."""
+    with _records_lock:
+        records = [r for r in _records.values() if r.get("call_key") is call_key]
+        settle = records[0].get("call_settle") if records else None
+    if callable(settle):
+        settle([r.get("status") for r in records])
 
 
 def _push_completion_event(record: dict[str, Any], result: dict[str, Any], status: str) -> None:

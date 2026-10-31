@@ -99,12 +99,14 @@ def update_placeholders(updates: dict[str, dict[str, Any]]) -> None:
                 record.update(fields)
 
 def take_early_steers(subagent_id: str) -> list[str]:
-    """Steering text the task's placeholder accepted before its child registered (consumed once)."""
+    """Steering text accepted before the child started (consumed once): what the task's placeholder parked, or what
+    ``_register_subagent`` carried over from it."""
     with _active_subagents_lock:
         record = _active_subagents.get(subagent_id)
         if record is None:
             return []
-        return record.pop("early_steers", None) or []
+        carried = record.pop("early_steers", None) or []
+        return carried + (record.pop("pending_steers", None) or [])
 
 def discard_placeholder(subagent_id: str) -> Optional[str]:
     """Drop a task's placeholder that never got a child (cancelled, refused or failed to build). Returns the
@@ -156,7 +158,7 @@ def interrupt_record(record: dict[str, Any], reason: str) -> bool:
         if agent is not None:
             return bool(request_hard_interrupt(agent, reason))
         if callable(cancel_fn):
-            return bool(cancel_fn(reason))
+            return bool(cancel_fn())  # a placeholder's stopper takes no reason; it reports through the unit
     except Exception as exc:
         logger.debug("interrupt of %s failed: %s", record.get("subagent_id"), exc)
     return False

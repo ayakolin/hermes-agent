@@ -78,6 +78,17 @@ def _fabricated_entry(idx: int, status: str, error: str, child: Any, duration: f
         entry["route"] = route
     return entry
 
+def _result_entry(idx: int, status: str, error: Optional[str], *, summary: Optional[str] = None,
+                  failure_reason: Optional[str] = None) -> dict[str, Any]:
+    """Result entry for a task that settled without a child ever running: no role, route or cost to report."""
+    entry: dict[str, Any] = {
+        "task_index": idx, "status": status, "summary": summary, "error": error, "api_calls": 0, "duration_seconds": 0,
+    }
+    if failure_reason:
+        entry["failure_reason"] = failure_reason
+    return entry
+
+
 def _append_missed_steer(entry: dict[str, Any], late_steer: Optional[str]) -> None:
     """Record steer text that won the race with the child's failure/timeout."""
     if late_steer:
