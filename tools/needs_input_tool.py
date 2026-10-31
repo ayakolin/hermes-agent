@@ -64,9 +64,8 @@ def attach_needs_input(entry: dict[str, Any], child: Any, result: Mapping[str, A
     work = str(entry.get("summary") or "").strip()
     entry.update(
         status="completed", exit_reason="completed", truncated=False, needs_input=dict(pending),
-        summary="" if work in placeholders else work,
+        summary=pending["question"] if work in placeholders else work,
     )
-    entry["summary"] = entry["summary"] or pending["question"]
     entry.pop("error", None)
     entry.pop("failure_reason", None)
 
