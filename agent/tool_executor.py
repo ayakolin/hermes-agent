@@ -34,7 +34,7 @@ from agent.compression_marker import _COMPRESSION_MARKER_PREFIX
 from agent.interrupt_control import _REASON_USER_INTERRUPT, interrupt_skip_wording
 from agent.message_sanitization import coalesce_tool_call_id
 from agent.onboarding import observe_tool_result as observe_onboarding_result
-from agent import plugin_live_notes
+from agent import dispatcher_ack, plugin_live_notes
 from agent.lsp import deferred as lsp_deferred
 from agent.inline_tool_executors import (
     INLINE_TOOL_EXECUTORS,
@@ -1157,6 +1157,7 @@ def _commit_tool_result(
     # A plugin that went live during this turn, and late LSP verdicts on this session's earlier edits,
     # are told on this new row (outside any untrusted-data wrapper).
     lsp_deferred.forward_to_agent(agent)
+    dispatcher_ack.queue_ack_reminder(agent)
     plugin_live_notes.attach_to_tool_message(agent, tool_message)
     # Prepare presentation data before the append. The emitting completion callback
     # stays below the durability fence; raw tool/model content remains unchanged.

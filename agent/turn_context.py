@@ -616,6 +616,8 @@ _PER_TURN_RESET_STATE: tuple[tuple[str, Any], ...] = (
     ("_iteration_budget_warning_injected", False),
     ("_run_budget_wrapup_injected", False), ("_verification_stop_nudges", 0),
     ("_pre_verify_nudges", 0), ("_lsp_turn_end_notes", 0),
+    # Dispatcher reply obligation (agent/dispatcher_ack.py); the obligation itself is armed by the surface.
+    ("_ack_reminder_sent", False), ("_ack_nudges", 0), ("_ack_text_seen", False), ("_ack_early_interim", None),
 )
 
 
