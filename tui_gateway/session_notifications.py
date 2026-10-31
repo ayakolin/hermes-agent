@@ -655,7 +655,8 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
         # The user opted out of process-driven agent wakes: the status row above is the whole
         # delivery. Subagent results are not process notifications and still land.
         return True
-    if evt_type == "completion" and completions is not None:
+    if evt_type in {"completion", "async_delegation"} and completions is not None:
+        # Both are grouped into the run's one turn (``_notif_dispatch_delegations`` for a mixed run).
         completions.append((evt, text))
         return True
     if not _notif_claim_turn(session, automation=True):
@@ -668,7 +669,85 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
     return True
 
 
+def _notif_dispatch_delegations(sid, session, notifications, registry, deferred, complete):
+    """Run one group of completion events AND async-delegation results as ONE turn.
+
+    Each event's durable delivery row is claimed on its own (a refusal releases or defers only that
+    row); an accepted submit settles every claim. Delegation results keep their per-event text and
+    ride one shared header so the model reads them as the same batch; process completions go through
+    ``ProcessNotificationBatch``, as when they run alone."""
+    from tools.async_delegation import claim_event_delivery, complete_event_delivery, release_event_delivery
+    from tools.process_registry_notifications import (
+        PROCESS_COMPLETE_DISPLAY_KIND, ProcessNotificationBatch, async_delegation_display_text)
+
+    claimed: list = []
+    texts: list = []
+    try:
+        for event, event_text in notifications:
+            claim = claim_event_delivery(event, "tui-poller")
+            if claim is None:  # another consumer owns the row: keep it out of this turn, never re-send it
+                continue
+            claimed.append((event, claim))
+            texts.append(event_text)
+        if not claimed:
+            _notif_release_turn(session)
+            return
+        if complete:
+            text = ProcessNotificationBatch(tuple((event, t) for (event, _claim), t
+                                                 in zip(claimed, texts))).render(registry)
+        else:
+            text = _delegation_batch_text(texts)
+        display = async_delegation_display_text(claimed[0][0]) if not complete else None
+    except Exception:
+        logger.exception("notification batch preparation failed")
+        _notif_release_turn(session)
+        for event, claim in claimed:
+            release_event_delivery(event, claim)
+        return
+    if not text:  # every claimed row was consumed elsewhere: nothing to ask the model
+        _notif_release_turn(session)
+        for event, claim in claimed:
+            complete_event_delivery(event, claim)
+        return
+    try:
+        if not _notif_submit(
+                f"__notif__{int(time.time() * 1000)}", sid, session, text, "notification batch dispatch failed",
+                report_ownership_refusal=False,
+                **({"display_kind": PROCESS_COMPLETE_DISPLAY_KIND} if complete else {}),
+                **({"display_metadata": {"display_text": display}} if display else {})):
+            for event, claim in claimed:
+                _notif_defer_event(event, claim,
+                                   deferred.append if deferred is not None else registry.completion_queue.put)
+            if deferred is None:
+                _notif_refusal_backoff(session)
+            return
+    except Exception:
+        # The submit raised: nothing was accepted, so every claim goes back for a later attempt.
+        logger.exception("notification batch dispatch raised")
+        for event, claim in claimed:
+            release_event_delivery(event, claim)
+        return
+    for event, claim in claimed:
+        complete_event_delivery(event, claim)
+
+
+def _delegation_batch_text(texts: list[str]) -> str:
+    if len(texts) == 1:
+        return texts[0]
+    header = (f"[IMPORTANT: {len(texts)} background subagent delegations completed. Treat these results "
+              "as one completion batch and send at most one consolidated user-facing response.]")
+    return "\n\n".join([header, *texts])
+
+
 def _notif_dispatch_completions(sid, session, notifications, registry, deferred):
+    """Dispatch one completed run of completion events as ONE turn. A run holding any async-delegation
+    result goes through ``_notif_dispatch_delegations`` (ProcessNotificationBatch understands only
+    process completions)."""
+    if not notifications:
+        return
+    if any(event.get("type") != "completion" for event, _text in notifications):
+        _notif_dispatch_delegations(sid, session, notifications, registry, deferred, complete=False)
+        return
     from tools.process_registry_notifications import PROCESS_COMPLETE_DISPLAY_KIND, ProcessNotificationBatch
     from tools.async_delegation import claim_event_delivery, complete_event_delivery, release_event_delivery
 
@@ -729,6 +808,29 @@ def _notif_handle_ready(sid, session, events, emitted, registry, fmt, deferred, 
     _notif_dispatch_completions(sid, session, completions, registry, deferred)
 
 
+def _completion_batch_window_seconds(session: dict) -> float:
+    """``delegation.completion_batch_window_seconds`` for the session's own profile (the window the gateway
+    batches with too): default 0.3 s, clamped to [0, 5], 0 disables batching. Read per session, never
+    cached, because one process serves many profiles."""
+    default, ceiling = 0.3, 5.0
+    with _session_profile_runtime_scope(session):
+        from hermes_cli.config import cfg_get
+        raw = cfg_get(_load_cfg(), "delegation", "completion_batch_window_seconds", default=default)
+    try:
+        return min(max(float(raw), 0.0), ceiling)
+    except (TypeError, ValueError):  # a hand-written "0.3s" or a list: the default, never a crash
+        return default
+
+
+def _completion_window_for(session: dict) -> float:
+    """This session's batch window, read once (a profile's config does not change how a poller batches
+    mid-life, and the read walks the session's own profile). Resolved through module globals so a test can
+    stand in for it."""
+    if "_completion_window" not in session:
+        session["_completion_window"] = globals()["_completion_batch_window_seconds"](session)
+    return session["_completion_window"]
+
+
 def _notification_poller_loop(stop_event: threading.Event, sid: str, session: dict) -> None:
     with _session_profile_runtime_scope(session):
         _notification_poller_scoped_loop(stop_event, sid, session)
@@ -774,6 +876,11 @@ def _notification_poller_scoped_loop(stop_event: threading.Event, sid: str, sess
         ready = take_ready(queue, 0.5)
         if not ready:
             continue
+        if window := _completion_window_for(session):
+            # A completion event's own producer, or another one for the same session, lands within the
+            # window: take that batch too so N results become one turn (the gateway does the same).
+            time.sleep(window)
+            ready += take_ready(queue, 0)
         try:
             handle(ready, None)
         except Exception as exc:

@@ -91,6 +91,9 @@ def test_viewer_poller_never_discovers_or_claims_bot_execution(monkeypatch, tmp_
         '_session_profile_runtime_scope': lambda session: contextlib.nullcontext(),
         '_session_home': lambda session: tmp_path,
         '_notif_handle_ready': lambda sid, session, ready, *a, **kw: (delivered.extend(ready), stop.set()),
+        # No batching window here: this poller test takes one snapshot per pass.
+        '_completion_batch_window_seconds': lambda session: 0.0,
+        '_completion_window_for': lambda session: 0.0,
     })
     poll(stop, 'live', {'agent': object(), 'history_lock': threading.RLock(), 'session_key': 'chat',
                       'active_session_lease': SimpleNamespace(lease_id='lease', released=False)})
