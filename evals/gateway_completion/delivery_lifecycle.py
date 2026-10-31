@@ -7,6 +7,7 @@ HOME = Path(os.environ["HERMES_HOME"])
 HOME.mkdir(parents=True, exist_ok=True)
 (HOME / "config.yaml").write_text(
     "display:\n  background_process_notifications: concise\n"
+    "delegation:\n  completion_batch_window_seconds: 0.05\n"  # the idle consumer's batch window
 )
 from gateway.run import GatewayRunner
 from gateway.config import GatewayConfig, Platform, PlatformConfig
@@ -81,6 +82,15 @@ async def main():
         assert "session_id" in result, result
         return result
 
+    async def wait_turns(count, deadline=5.0):
+        """The idle consumer wakes on the producer's put and batches for the configured window before
+        it routes: wait for the turn instead of measuring the old fixed poll tick."""
+        for _ in range(int(deadline / 0.025)):
+            if len(turns) >= count and not adapter._background_tasks:
+                return
+            await asyncio.sleep(0.025)
+        raise RuntimeError(f"no turn within {deadline}s (turns={len(turns)})")
+
     async def settle():
         for _ in range(200):
             if not adapter._background_tasks:
@@ -100,7 +110,7 @@ async def main():
     # Pattern arrives after post-turn drain while idle watcher remains running.
     result = spawn("READY_AUDIT", patterns=["READY_AUDIT"])
     await runner._hmwa_post_turn_hooks({}, {}, "")
-    await asyncio.sleep(1)
+    await wait_turns(1)
     print(
         "WATCH_IDLE",
         json.dumps({
@@ -145,7 +155,7 @@ async def main():
         (HOME / "child-artifact.txt").write_text(output)
         return {"summary": output, "status": "completed", "api_calls": 0}
 
-    async def dispatch_case(route):
+    async def dispatch_case(route, *, expect_delivered=False):
         h = dispatch_async_delegation(
             goal="local lifecycle",
             context=None,
@@ -155,9 +165,14 @@ async def main():
             session_key=route,
             runner=local_child,
         )
-        for _ in range(100):
+        # The idle consumer wakes on the producer's put, batches for the window, then claims. A busy
+        # adapter can refuse that first claim; the refusal's timed wake re-offers it, so wait for the
+        # terminal state the caller expects rather than the first attempt.
+        for _ in range(400):
             row = get_durable_delegation(h["delegation_id"])
-            if row and row.get("delivery_attempts", 0) > 0:
+            done = row and (row["delivery_state"] in {"delivered", "dropped"} if expect_delivered
+                            else row.get("delivery_attempts", 0) > 0)
+            if done:
                 break
             await asyncio.sleep(0.05)
         await settle()
@@ -165,7 +180,7 @@ async def main():
 
     turns.clear()
     sends.clear()
-    h, row = await dispatch_case(key)
+    h, row = await dispatch_case(key, expect_delivered=True)
     print(
         "ASYNC_DISCORD_IDLE",
         json.dumps({
