@@ -1349,6 +1349,23 @@ The evidence that feeds this guard (which test/lint/build commands ran, which fi
 
 For a user/plugin policy gate at the same point — keep the agent going with your own checks — see the [`pre_verify` hook](./features/hooks.md#pre_verify).
 
+## Dispatcher Mode (acknowledgements)
+
+A dispatcher session answers at once and hands long work to background executor subagents. Whether a session is a dispatcher is decided when the session is created and never changes mid-conversation (a mid-session tool-surface change would invalidate the prompt cache). These knobs control how the model is kept from going quiet on such a session; they are read per turn:
+
+```yaml
+dispatcher:
+  ack:
+    reminder: true        # one-shot system note on the first tool result of a turn that has shown no text
+    max_nudges: 1         # end-of-turn nudges when a human turn would end on a bare silence marker; 0 = off
+    force_interim: true   # show pre-tool-call text on every platform, and keep delegations in the background
+    early_interim: true   # messaging platforms: send that text when the first tool call starts, not after it
+```
+
+`reminder` rides the first tool result of a turn that has produced no user-visible text, so no cached prompt byte moves; it is delivered once per turn. `max_nudges` bounds a stop gate that answers a bare silence marker (`NO_REPLY` / `[SILENT]`) with one more model call — each nudge is one extra request, and the marker is never shown to the user. `force_interim` overrides the platform tier and Mattermost's per-platform opt-in (scratch text in a public thread) and also keeps `delegation.gateway_mode: auto` on the background path; set it to `false` to fall back to `display.interim_assistant_messages`. `early_interim` applies to messaging platforms only — local viewers rebuild the turn from stored rows, so they keep their existing ordering.
+
+None of this runs for cron runs, subagent children, background review forks, execution-completion notifications, or a group message that was not addressed to the bot.
+
 ## Standing Goals (`/goal`)
 
 When a standing goal is active, Hermes judges whether each assistant response satisfies it. If not, it feeds a continuation prompt back into the same session and keeps working until the goal is done, the turn budget is exhausted, or the user pauses/clears it. The turn budget is the real backstop — judge failures fail **open** (continue) so a flaky judge never wedges progress.
@@ -2464,7 +2481,7 @@ Platforms without an override fall back to the global `tool_progress` value. Val
 
 Signal is listed as a valid platform key because the setting can be saved per platform, but the current Signal adapter cannot edit sent messages and does not render tool-progress bubbles. Keep Signal `tool_progress` set to `off`; use the CLI or an editing-capable messaging platform if you need to watch each tool call live.
 
-`interim_assistant_messages` is gateway-only. When enabled, Hermes sends completed mid-turn assistant updates as separate chat messages. This is independent from `tool_progress` and does not require gateway streaming.
+`interim_assistant_messages` is gateway-only. When enabled, Hermes sends completed mid-turn assistant updates as separate chat messages. This is independent from `tool_progress` and does not require gateway streaming. A [dispatcher session](#dispatcher-mode-acknowledgements) forces it on (see `dispatcher.ack.force_interim` below).
 
 `show_commentary` (default `true`) controls Codex Responses models' commentary channel — the polished progress narration these models produce alongside their private reasoning. When enabled, each completed commentary message is delivered as a visible mid-turn update (on the gateway this also requires `interim_assistant_messages`). Set it to `false` if the extra narration annoys you: commentary then falls back to the reasoning channel and is only shown when `show_reasoning` is enabled.
 

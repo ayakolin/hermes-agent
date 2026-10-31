@@ -52,6 +52,14 @@ in `assistant_msg["reasoning"]`.
 `INLINE_TOOL_EXECUTORS` table in `agent/inline_tool_executors.py` before `handle_function_call()`.
 Adding one: register in that table (no `if name == ...` chain); `tools/todo_tool.py` is the pattern.
 
+**Dispatcher reply obligation** (`agent/dispatcher_ack.py`): a dispatcher session owes the user a first
+line on every human turn. A surface arms `_ack_obligation` before `run_conversation` (like
+`_silence_marker_needs_reply`); the turn then carries a one-shot reminder on its first tool result
+(`tool_executor._commit_tool_result`), a bounded fifth stop gate that rejects a bare silence marker
+(`turn_stop_gates`), and an early preamble flush from the tool-call-started stream event. Both rows of
+the nudge pair are flagged `_ack_nudge_synthetic` and registered in all four scaffolding lists
+(`session_persistence`, `turn_final_response`, `turn_finalizer`, `conversation_compression`).
+
 ## Message-flow invariants (every change is reviewed against these)
 
 - **Prompt caching must not break.** Never alter past context, change toolsets, reload memories,
