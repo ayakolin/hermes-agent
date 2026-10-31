@@ -10,6 +10,7 @@ crash-recovery wiring. Only the async lifecycle lives here; the child run is an 
 from __future__ import annotations
 
 import contextvars
+import functools
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional
 from hermes_constants import get_hermes_home, hermes_home_key
 from tools.daemon_pool import DaemonThreadPoolExecutor
 from tools.thread_context import propagate_context_to_thread
+from tools.async_delegation_queue import collect_starts_locked, queue_positions_locked, run_starts
 from tools.async_delegation_worker import worker_ledger, require_ledger_owner
 from tools.delegation_redaction import redact_child_result, redact_completion_event
 
@@ -732,7 +734,7 @@ def active_task_count() -> int:
         return sum(
             len(r.get("task_indexes") or r["goals"])
             if r.get("is_batch") and isinstance(r.get("goals"), (list, tuple)) and r["goals"] else 1
-            for r in _records.values() if r.get("status") in {"running", "finalizing"})
+            for r in _records.values() if r.get("status") in {"running", "finalizing"} and r.get("phase") != "queued")
 
 
 def _session_records(statuses, session_key: str, origin_ui_session_id: str, parent_session_id: str) -> list:
@@ -826,10 +828,58 @@ def _dispatch_admitted(
     worker_ledger()  # refuse unbound workers before publishing a live record
     is_batch = goals is not None
     label = " batch" if is_batch else ""
-    classify = _batch_status if is_batch else (lambda r: r.get("status") or "completed")
-    crash_result = _batch_crash if is_batch else _single_crash
+    record = _new_record(
+        delegation_id=delegation_id, goal=goal, goals=goals, context=context, toolsets=toolsets, role=role, model=model,
+        session_key=session_key, origin_ui_session_id=origin_ui_session_id, origin_session_id=origin_session_id,
+        parent_session_id=parent_session_id, interrupt_fn=interrupt_fn, progress_fn=progress_fn, slot_key=slot_key,
+        task_transcripts=task_transcripts, task_indexes=task_indexes)
+    with _records_lock:
+        if any((field, record[field]) in _refused_by for field in _FENCED_FIELDS):
+            return {"status": "rejected", "error": "This session was closed (exit or /new): no new background work."}
+        active_slots = {r.get("slot_key") or r["delegation_id"] for r in _records.values()
+                        if r.get("status") in _ACTIVE_STATES and r.get("phase") != "queued"}
+        if record["slot_key"] not in active_slots and len(active_slots) >= max_async_children:
+            return {"status": "rejected", "error": capacity_error}
+        _records[delegation_id] = record
+        live_units = sum(1 for r in _records.values() if r.get("status") in _LIVE_STATES)
+    _persist_dispatch(record)
+    # Units of one call share a slot, so live units can exceed slots: size the pool by units or a
+    # unit queues behind a full pool and the stale monitor kills it before its child ever starts.
+    executor = _get_executor(max(max_async_children, live_units))
+
+    from hermes_cli.backend_retirement import retirement
+
+    # The outer dispatch reservation prevents a freeze during this handoff. Retain a worker
+    # reservation too: the stall monitor may finalize its registry record before it really exits.
+    retirement.acquire()
+    try:
+        future = executor.submit(propagate_context_to_thread(functools.partial(_run_record, delegation_id, runner, is_batch)))
+        future.add_done_callback(lambda _: retirement.release())
+    except Exception as exc:  # pragma: no cover — pool submit failure is rare
+        retirement.release()
+        with _records_lock:
+            _records.pop(delegation_id, None)
+            starts = collect_starts_locked()  # the freed slot goes to the next queued dispatcher unit, if any
+        _forget_dispatch(delegation_id)
+        run_starts(starts)
+        return {"status": "rejected", "error": f"Failed to schedule async delegation{label}: {exc}"}
+    if progress_fn is not None:
+        _ensure_stale_monitor()
+    return {"status": "dispatched", "delegation_id": delegation_id}
+
+
+def _new_record(
+    *, delegation_id: str, goal: str, goals: Optional[list[str]], context: Optional[str], toolsets: Optional[list[str]],
+    role: str, model: Optional[str], session_key: str, origin_ui_session_id: str, origin_session_id: str,
+    parent_session_id: Optional[str], interrupt_fn: Optional[Callable[[], None]],
+    progress_fn: Optional[Callable[[], tuple]], slot_key: Optional[str], task_transcripts: Optional[dict[str, str]],
+    task_indexes: Optional[list[int]],
+) -> dict[str, Any]:
+    """The registry record of one dispatch (not yet published). Built on the dispatching thread: the routing origin and
+    the Context it captures are that thread's."""
+    is_batch = goals is not None
     dispatched_at = time.time()
-    record: dict[str, Any] = {
+    return {
         "delegation_id": delegation_id, "goal": goal, **({"goals": list(goals)} if is_batch else {}),
         "context": context, "toolsets": list(toolsets) if toolsets else None, "role": role, "model": model,
         "session_key": session_key, "origin_ui_session_id": origin_ui_session_id,
@@ -846,57 +896,40 @@ def _dispatch_admitted(
         "_context": contextvars.copy_context(),
         # Stale-monitor bookkeeping (see _stale_monitor_loop).
         "_progress_token": None, "_progress_ts": dispatched_at, "_interrupted_at": None}
+
+
+def _run_record(delegation_id: str, runner: Callable[[], dict[str, Any]], is_batch: bool) -> None:
+    """Worker body of every dispatch path: run the unit, classify its result, and always finalize it."""
+    label = " batch" if is_batch else ""
+    classify = _batch_status if is_batch else (lambda r: r.get("status") or "completed")
+    crash_result = _batch_crash if is_batch else _single_crash
+    result: dict[str, Any] = {}
+    status = "error"
     with _records_lock:
-        if any((field, record[field]) in _refused_by for field in _FENCED_FIELDS):
-            return {"status": "rejected", "error": "This session was closed (exit or /new): no new background work."}
-        active_slots = {r.get("slot_key") or r["delegation_id"] for r in _records.values() if r.get("status") in _ACTIVE_STATES}
-        if record["slot_key"] not in active_slots and len(active_slots) >= max_async_children:
-            return {"status": "rejected", "error": capacity_error}
-        _records[delegation_id] = record
-        live_units = sum(1 for r in _records.values() if r.get("status") in _LIVE_STATES)
-    _persist_dispatch(record)
-    # Units of one call share a slot, so live units can exceed slots: size the pool by units or a
-    # unit queues behind a full pool and the stale monitor kills it before its child ever starts.
-    executor = _get_executor(max(max_async_children, live_units))
-
-    def _worker() -> None:
-        result: dict[str, Any] = {}
-        status = "error"
-        with _records_lock:
-            rec = _records.get(delegation_id)
-            if rec is not None:
-                # The stall clock starts when the runner starts; a unit queued behind a full pool is not stalled.
-                rec.update(_started=True, _progress_ts=time.time())
-        try:
-            result = runner() or {}
-            status = classify(result)
-        except Exception as exc:
-            logger.exception(f"Async delegation{label} %s crashed", delegation_id)
-            result = crash_result(f"{type(exc).__name__}: {exc}", round(time.time() - dispatched_at, 2))
-        finally:
-            _finalize(delegation_id, result, status)
-
-    from hermes_cli.backend_retirement import retirement
-
-    # The outer dispatch reservation prevents a freeze during this handoff. Retain a worker
-    # reservation too: the stall monitor may finalize its registry record before it really exits.
-    retirement.acquire()
+        rec = _records.get(delegation_id)
+        dispatched_at = rec["dispatched_at"] if rec is not None else time.time()
+        if rec is not None:
+            # The stall clock starts when the runner starts; a unit queued behind a full pool is not stalled.
+            rec.update(_started=True, _progress_ts=time.time())
+            if "phase" in rec:  # a dispatcher unit: from here it is running, not merely admitted
+                rec["phase"] = "running"
     try:
-        future = executor.submit(propagate_context_to_thread(_worker))
-        future.add_done_callback(lambda _: retirement.release())
-    except Exception as exc:  # pragma: no cover — pool submit failure is rare
-        retirement.release()
-        with _records_lock:
-            _records.pop(delegation_id, None)
-        if remote := worker_ledger():
-            remote.unscheduled(delegation_id)
-        else:
-            with _DB_LOCK, _transaction() as conn:
-                conn.execute("DELETE FROM async_delegations WHERE delegation_id=?", (delegation_id,))
-        return {"status": "rejected", "error": f"Failed to schedule async delegation{label}: {exc}"}
-    if progress_fn is not None:
-        _ensure_stale_monitor()
-    return {"status": "dispatched", "delegation_id": delegation_id}
+        result = runner() or {}
+        status = classify(result)
+    except Exception as exc:
+        logger.exception(f"Async delegation{label} %s crashed", delegation_id)
+        result = crash_result(f"{type(exc).__name__}: {exc}", round(time.time() - dispatched_at, 2))
+    finally:
+        _finalize(delegation_id, result, status)
+
+
+def _forget_dispatch(delegation_id: str) -> None:
+    """Remove the ledger row of a dispatch that was never scheduled."""
+    if remote := worker_ledger():
+        remote.unscheduled(delegation_id)
+        return
+    with _DB_LOCK, _transaction() as conn:
+        conn.execute("DELETE FROM async_delegations WHERE delegation_id=?", (delegation_id,))
 
 
 def dispatch_async_delegation(
@@ -927,6 +960,13 @@ def dispatch_async_delegation(
     return handle
 
 
+def unit_goal_label(goals: list[str], task_indexes: Optional[list[int]]) -> str:
+    """The registry record's goal text for a fan-out unit. ``goals`` is the whole call (result task_index indexes it);
+    the unit's own goals label the record."""
+    unit_goals = [goals[i] for i in task_indexes] if task_indexes is not None else list(goals)
+    return unit_goals[0] if len(unit_goals) == 1 else f"{len(unit_goals)} parallel subagents: " + "; ".join(g[:40] for g in unit_goals)
+
+
 def dispatch_async_delegation_batch(
     *, goals: list[str], context: Optional[str], toolsets: Optional[list[str]], role: str, model: Optional[str],
     session_key: str, parent_session_id: Optional[str] = None, runner: Callable[[], dict[str, Any]],
@@ -942,10 +982,8 @@ def dispatch_async_delegation_batch(
     by ``slot_key`` (in-unit parallelism is bounded separately) — and produces a SINGLE completion
     event carrying per-task ``results``."""
     delegation_id = delegation_id or _new_delegation_id()
-    # ``goals`` is the whole call (result task_index indexes it); the unit's own goals label the record.
-    unit_goals = [goals[i] for i in task_indexes] if task_indexes is not None else list(goals)
-    n = len(unit_goals)
-    combined_goal = unit_goals[0] if n == 1 else f"{n} parallel subagents: " + "; ".join(g[:40] for g in unit_goals)
+    combined_goal = unit_goal_label(goals, task_indexes)
+    n = len(task_indexes) if task_indexes is not None else len(goals)
     handle = _dispatch(
         delegation_id=delegation_id, goal=combined_goal, goals=goals, context=context,
         toolsets=toolsets, role=role, model=model, session_key=session_key,
@@ -979,6 +1017,10 @@ def _finalize(delegation_id: str, result: Any, status: str) -> None:
         record["interrupt_fn"] = None  # drop the closure; child is done
         record["progress_fn"] = None  # stop stale-monitor sampling
         snapshot = dict(record)
+        # The slot this record held is free from the status flip on: hand it to the next queued dispatcher unit in
+        # the same lock hold, so a concurrent dispatch cannot be admitted ahead of the queue head.
+        starts = collect_starts_locked()
+    run_starts(starts)
     _push_completion_event(snapshot, result(snapshot) if callable(result) else result, status)
     with _records_lock:
         if delegation_id in _records:
@@ -1231,15 +1273,20 @@ def list_async_delegations() -> list[dict[str, Any]]:
     now = time.time()
     samplers: dict[str, Callable] = {}
     with _records_lock:
+        positions = queue_positions_locked()
         items = []
         for r in _records.values():
             item = {k: v for k, v in r.items() if k not in {"interrupt_fn", "progress_fn"} and not k.startswith("_")}
             status = r.get("status")
             if status in _ACTIVE_STATES:
-                if r.get("_progress_ts"):
-                    item["seconds_since_progress"] = round(now - r["_progress_ts"], 1)
-                if callable(r.get("progress_fn")):
-                    samplers[r["delegation_id"]] = r["progress_fn"]
+                if r.get("phase") == "queued":
+                    # Waiting for a slot: no progress clock yet (it starts with the runner), but a place in line.
+                    item.update(queue_position=positions.get(r["delegation_id"]), queued_seconds=round(now - r["queued_at"], 1))
+                else:
+                    if r.get("_progress_ts") and ("phase" not in r or r.get("_started")):
+                        item["seconds_since_progress"] = round(now - r["_progress_ts"], 1)
+                    if callable(r.get("progress_fn")):
+                        samplers[r["delegation_id"]] = r["progress_fn"]
             if status in ("stalling", "stalled"):
                 for src, dst in _STALL_FIELD_MAP:
                     if r.get(src) is not None:

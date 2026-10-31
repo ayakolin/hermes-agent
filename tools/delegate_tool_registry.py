@@ -48,12 +48,27 @@ def is_spawn_paused() -> bool:
         return _spawn_paused
 
 def _register_subagent(record: dict[str, Any]) -> None:
+    """Publish a live child. It replaces its own placeholder (same id, ``agent`` None) atomically; steering text the
+    placeholder had accepted rides over as ``early_steers`` for the run to prepend (``take_early_steers``)."""
     sid = record.get("subagent_id")
     if not sid:
         return
     record.setdefault("accepting_steer", True)
     with _active_subagents_lock:
+        prior = _active_subagents.get(sid)
+        if prior is not None and prior.get("agent") is None and prior.get("pending_steers"):
+            record["early_steers"] = list(prior["pending_steers"])
         _active_subagents[sid] = record
+
+def _forget_locked(record: dict[str, Any]) -> None:
+    """Drop *record* and keep a bounded attribution stub. Caller holds ``_active_subagents_lock``."""
+    sid = record.get("subagent_id")
+    _active_subagents.pop(sid, None)
+    if not sid:
+        return
+    _recent_subagents[sid] = {k: record.get(k) for k in ("goal", "delegation_id", "owner_agent_session_id")}
+    while len(_recent_subagents) > _RECENT_SUBAGENTS_CAP:
+        _recent_subagents.pop(next(iter(_recent_subagents)), None)
 
 def _unregister_subagent(subagent_id: str, *, agent: Any = None) -> None:
     """Drop the live record (exact agent identity when given) and keep a bounded attribution stub."""
@@ -61,13 +76,48 @@ def _unregister_subagent(subagent_id: str, *, agent: Any = None) -> None:
         record = _active_subagents.get(subagent_id)
         if record is None or not (agent is None or record.get("agent") is agent):
             return
-        _active_subagents.pop(subagent_id, None)
-        sid = record.get("subagent_id")
-        if not sid:
-            return
-        _recent_subagents[sid] = {k: record.get(k) for k in ("goal", "delegation_id", "owner_agent_session_id")}
-        while len(_recent_subagents) > _RECENT_SUBAGENTS_CAP:
-            _recent_subagents.pop(next(iter(_recent_subagents)), None)
+        _forget_locked(record)
+
+# ── Placeholders: a deferred (dispatcher) unit's task is listed, steerable and stoppable before its child exists ──
+# A placeholder is a registry record with ``agent`` None. It carries the same owner authority fields as a live child's
+# record (so the TUI, Desktop and CLI authority checks accept it), a ``cancel_fn`` that stops the task wherever it is
+# (queued, waiting for construction, mid-construction) and the steering text accepted so far.
+_MAX_PENDING_STEERS = 8
+_MAX_STEER_CHARS = 2000
+
+def register_placeholder(**fields: Any) -> None:
+    """Publish a task that has no child yet. ``fields`` are the registry record fields (``subagent_id``, ``goal``,
+    owner authority, ``cancel_fn``, ``status``/``phase``/``queue_position``...)."""
+    _register_subagent({**fields, "agent": None, "pending_steers": []})
+
+def update_placeholders(updates: dict[str, dict[str, Any]]) -> None:
+    """Patch still-unstarted placeholders by id (queue position, promotion); a record that has a child is left alone."""
+    with _active_subagents_lock:
+        for sid, fields in updates.items():
+            record = _active_subagents.get(sid)
+            if record is not None and record.get("agent") is None:
+                record.update(fields)
+
+def take_early_steers(subagent_id: str) -> list[str]:
+    """Steering text the task's placeholder accepted before its child registered (consumed once)."""
+    with _active_subagents_lock:
+        record = _active_subagents.get(subagent_id)
+        if record is None:
+            return []
+        return record.pop("early_steers", None) or []
+
+def discard_placeholder(subagent_id: str) -> Optional[str]:
+    """Drop a task's placeholder that never got a child (cancelled, refused or failed to build). Returns the
+    steering text it had accepted, which the caller reports as ``missed_steer``; None when nothing is pending or the
+    task already has a live child (that record is the run's to clean up)."""
+    with _active_subagents_lock:
+        record = _active_subagents.get(subagent_id)
+        if record is None or record.get("agent") is not None:
+            return None
+        record["accepting_steer"] = False
+        _forget_locked(record)
+        pending = record.get("pending_steers") or []
+    return "\n".join(pending) or None
 
 def _close_subagent_steering(subagent_id: str, agent: Any) -> Optional[str]:
     """Atomically close steer acceptance and drain its final durable artifact. ``steer_subagent`` holds the same
@@ -95,14 +145,21 @@ def interrupt_subagent(subagent_id: str) -> bool:
     grandchildren via AIAgent.interrupt()). True iff a matching subagent was found."""
     with _active_subagents_lock:
         record = _active_subagents.get(subagent_id)
-    agent = record.get("agent") if record else None
-    if agent is None:
-        return False
+    return interrupt_record(record, f"Interrupted via TUI ({subagent_id})") if record else False
+
+def interrupt_record(record: dict[str, Any], reason: str) -> bool:
+    """Stop the task *record* describes: hard-interrupt its live child, or call a placeholder's ``cancel_fn``
+    (a deferred task that has no child yet, so it never starts). The caller authorized the record; this acts on that
+    object and never re-resolves its recyclable public id."""
+    agent, cancel_fn = record.get("agent"), record.get("cancel_fn")
     try:
-        return bool(request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"))
+        if agent is not None:
+            return bool(request_hard_interrupt(agent, reason))
+        if callable(cancel_fn):
+            return bool(cancel_fn(reason))
     except Exception as exc:
-        logger.debug("interrupt_subagent(%s) failed: %s", subagent_id, exc)
-        return False
+        logger.debug("interrupt of %s failed: %s", record.get("subagent_id"), exc)
+    return False
 
 def _subagent_transport_matches(record, transport) -> bool:
     """Authority follows the owning session's LIVE transport slot, read at check time.
@@ -147,14 +204,33 @@ def steer_subagent(
             or record.get("owner_session_record") is not owner_session_record
         ):
             return False
-        agent = record.get("agent")
-        if agent is None:
+        return _steer_locked(record, subagent_id, text)
+
+def _steer_locked(record: dict[str, Any], subagent_id: str, text: str) -> bool:
+    """Deliver *text* to the record's child, or park it on a placeholder (bounded) for the child to start with.
+    Caller holds ``_active_subagents_lock`` and has authorized the record."""
+    agent = record.get("agent")
+    if agent is None:
+        pending = record.get("pending_steers")
+        if pending is None or len(pending) >= _MAX_PENDING_STEERS:
             return False
-        try:
-            return bool(agent.steer(text))
-        except Exception as exc:
-            logger.debug("steer_subagent(%s) failed: %s", subagent_id, exc)
+        pending.append(text.strip()[:_MAX_STEER_CHARS])
+        return True
+    try:
+        return bool(agent.steer(text))
+    except Exception as exc:
+        logger.debug("steer_subagent(%s) failed: %s", subagent_id, exc)
+        return False
+
+def steer_authorized_record(subagent_id: str, snapshot: dict[str, Any], text: str) -> bool:
+    """Steer the task a caller already authorized through a snapshot of its record (Desktop's sidecar): the live
+    record must still be the same object of work, that is the same child or the same still-unstarted placeholder."""
+    with _active_subagents_lock:
+        record = _active_subagents.get(subagent_id)
+        if (not record or not record.get("accepting_steer") or record.get("agent") is not snapshot.get("agent")
+                or not text.strip()):
             return False
+        return _steer_locked(record, subagent_id, text)
 
 def _capture_gateway_steer_authority(owner_session_id: Optional[str]) -> tuple[Any, Any]:
     """Exact request transport + live session generation, if any — an in-process
@@ -168,7 +244,10 @@ def _capture_gateway_steer_authority(owner_session_id: Optional[str]) -> tuple[A
         return None, None
 
 # Registry record fields never exposed to the TUI/RPC snapshot.
-_PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer"})
+_PRIVATE_RECORD_KEYS = frozenset({
+    "agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer",
+    "cancel_fn", "pending_steers", "early_steers", "owner_db_path",
+})
 
 def list_active_subagents() -> list[dict[str, Any]]:
     """Copy of the running subagent tree ({subagent_id, parent_id, depth, goal, model,
@@ -242,17 +321,23 @@ def _list_payload(parent_agent: Any) -> dict[str, Any]:
         if not _owns_subagent_record(r, parent_agent):
             continue
         started = r.get("started_at")
+        seconds = round(time.time() - started, 1) if isinstance(started, (int, float)) else None
+        waiting = r.get("agent") is None and r.get("phase") is not None  # a deferred task without a child yet
         entries.append({
             "subagent_id": r.get("subagent_id"),
             "parent_id": r.get("parent_id"),
             "goal": r.get("goal"),
             "model": r.get("model"),
             "status": r.get("status"),
-            "running_seconds": round(time.time() - started, 1) if isinstance(started, (int, float)) else None,
+            **({"phase": r["phase"], "queue_position": r.get("queue_position"), "waiting_seconds": seconds}
+               if waiting else {"running_seconds": seconds}),
             "accepting_steer": bool(r.get("accepting_steer", False)),
-            "live_transcript": getattr(r.get("agent"), "_live_transcript_path", None),
+            "live_transcript": getattr(r.get("agent"), "_live_transcript_path", None) or r.get("live_transcript"),
         })
     payload: dict[str, Any] = {"action": "list", "count": len(entries), "subagents": entries}
+    if any("phase" in e for e in entries):
+        payload["queued"] = sum(e.get("status") == "queued" for e in entries)
+        payload["running"] = len(entries) - payload["queued"]
     if not entries:
         payload["note"] = (
             "No live subagents right now. Children that already finished "
@@ -285,10 +370,21 @@ def _handle_control_action(action: str, subagent_id: Optional[str], message: Opt
     if outcome is None:
         return tool_error(f"Unknown action '{action}'. Use spawn, list, steer, or stop.")
     status, note, failure = outcome
+    if record.get("agent") is None and action in _PLACEHOLDER_NOTES:
+        note = _PLACEHOLDER_NOTES[action]
     ok = interrupt_subagent(sid) if action == "stop" else steer_subagent(sid, message.strip())
     if ok:
         return json.dumps({"action": action, "subagent_id": sid, "status": status, "note": note}, ensure_ascii=False)
     return tool_error(failure.format(sid=sid))
+
+# Success notes for a task whose child does not exist yet (queued, or waiting its turn to be built).
+_PLACEHOLDER_NOTES = {
+    "stop": (
+        "The task had not started running: it is cancelled and will not start. Its completion message (status "
+        "interrupted) still arrives — do not wait or poll."
+    ),
+    "steer": "Steering text queued. The subagent is given it together with its task when it starts.",
+}
 
 # action -> (success status, success note, failure error template)
 _CONTROL_OUTCOMES = {

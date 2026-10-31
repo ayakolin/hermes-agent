@@ -45,7 +45,7 @@ from tools.delegate_tool_registry import (
     _CONTROL_ACTIONS, _active_subagents, _active_subagents_lock, _capture_gateway_steer_authority,
     _handle_control_action, _is_descendant_of, _owns_subagent_record, _register_subagent, _unregister_subagent,
     get_subagent_attribution, interrupt_subagent, is_spawn_paused, list_active_subagents, set_spawn_paused,
-    steer_subagent,
+    steer_subagent, take_early_steers,
 )
 from tools.delegate_tool_tasks import (
     _MAX_TASK_IMAGES, _coerce_task_images, _coerce_task_schemas, _normalize_task_images, _normalize_task_list,
@@ -232,6 +232,13 @@ def _build_child_agent(
     override_service_tier: Optional[str] = None,  # a route's checked speed tier (tools/delegate_tool_tuning.py)
     # A dispatcher session's executor baseline (agent/executor_baseline.py), passed by _build_children only.
     executor_baseline=None,
+    # A deferred (dispatcher) unit builds on a pool thread, possibly after its parent's turn or session moved on: the
+    # id it already told the model, no parent interrupt wiring (background units outlive turn stops), and the
+    # parent identity captured when the call was made (tools/delegate_tool_deferred.py).
+    subagent_id: Optional[str] = None,
+    attach: bool = True,
+    parent_session_id: Optional[str] = None,
+    parent_turn_id: Optional[str] = None,
 ):
     """Build (don't run) a child AIAgent on the main thread. override_* (from delegation config) replace parent
     inheritance so children can run on a different provider:model pair. ``profile_home`` builds (and later runs,
@@ -251,7 +258,7 @@ def _build_child_agent(
 
     # One subagent_id shared by the progress callback, spawn_requested event and
     # the live registry; parent_id is set when THIS parent is itself a subagent.
-    subagent_id = f"sa-{task_index}-{_uuid.uuid4().hex[:8]}"
+    subagent_id = subagent_id or f"sa-{task_index}-{_uuid.uuid4().hex[:8]}"
     parent_subagent_id = getattr(parent_agent, "_subagent_id", None)
 
     # General delegation behavior (reasoning, compression, capabilities) stays
@@ -292,7 +299,7 @@ def _build_child_agent(
             request_overrides = dict(override_request_overrides)
         else:
             request_overrides = {} if override_provider else dict(getattr(parent_agent, "request_overrides", {}) or {})
-        parent_sid = getattr(parent_agent, "session_id", None)
+        parent_sid = parent_session_id or getattr(parent_agent, "session_id", None)
         child_session_db = _open_child_session_db(parent_agent)
         with delegated_child_context():
             try:
@@ -352,7 +359,8 @@ def _build_child_agent(
     if child_pool is not None:
         child._credential_pool = child_pool
 
-    _attach_child(parent_agent, child)  # interrupt propagation
+    if attach:
+        _attach_child(parent_agent, child)  # interrupt propagation
     # spawn_requested now — the child may queue for seconds when the pool is
     # saturated — then the subagent_start lifecycle hook.
     _safe_progress(child_progress_cb, "subagent.spawn_requested", preview=goal)
@@ -360,7 +368,8 @@ def _build_child_agent(
         from hermes_cli.lifecycle import invoke_hook as _invoke_hook
         _invoke_hook(
             "subagent_start", parent_session_id=parent_sid,
-            parent_turn_id=getattr(parent_agent, "_current_turn_id", "") or "", parent_subagent_id=parent_subagent_id,
+            parent_turn_id=(getattr(parent_agent, "_current_turn_id", "") or "") if parent_turn_id is None else parent_turn_id,
+            parent_subagent_id=parent_subagent_id,
             child_session_id=getattr(child, "session_id", None), child_subagent_id=subagent_id,
             child_role=effective_role, child_goal=goal,
         )
@@ -394,7 +403,10 @@ def _run_single_child(
         child, parent_agent, goal, owner_session_id=owner_session_id, owner_transport=owner_transport,
         owner_session_record=owner_session_record,
     )
-    run = _ChildRun(child, parent_agent, task_index, goal, _subagent_id, child_progress_cb, heartbeat=heartbeat)
+    # Steering text the task's placeholder accepted before this child existed starts the run with its goal.
+    early = take_early_steers(_subagent_id) if _subagent_id else []
+    start_goal = goal + "\n\nCourse corrections received before you started:\n" + "\n".join(early) if early else goal
+    run = _ChildRun(child, parent_agent, task_index, start_goal, _subagent_id, child_progress_cb, heartbeat=heartbeat)
     # Set when a timed-out Future still owns the child: closing it from this
     # thread before the worker settles races the conversation's finally path.
     _child_close_deferred = False
@@ -457,9 +469,12 @@ def _build_children(
     task_list: list[dict[str, Any]], task_schemas: list[Optional[dict[str, Any]]], routes: list[Any], *,
     top_role: str, max_iterations: int, parent_agent,
     live_deleg_id: Optional[str], live_writers: list, task_images: Optional[list[Optional[list[str]]]] = None,
+    only: Optional[int] = None, child_extra: Optional[dict[str, Any]] = None,
 ) -> tuple[list[tuple], Optional[str]]:
     """Build every child on the main thread (construction is not thread-safe), each on its task's route;
-    ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure."""
+    ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure. ``only`` builds just that task and
+    ``child_extra`` adds ``_build_child_agent`` kwargs (a deferred unit building one child on a pool thread). A
+    dispatcher parent's executor baseline is resolved by agent/executor_baseline.py."""
     from agent.executor_baseline import executor_baseline_for
     from tools.delegation_live_log import wrap_progress_callback
     from tools.delegation_output_schema import append_output_contract
@@ -468,7 +483,7 @@ def _build_children(
     baseline_kwargs = {"executor_baseline": b} if (b := executor_baseline_for(parent_agent)) is not None else {}
     for i, t in enumerate(task_list):
         route = routes[i]
-        if route.error:
+        if route.error or (only is not None and i != only):
             continue  # refused by its backend: no child; its result entry is the refusal
         _task_schema = task_schemas[i] if i < len(task_schemas) else None
         _child_context = t.get("context")
@@ -480,7 +495,7 @@ def _build_children(
                 toolsets=None,  # always inherit the parent's toolsets
                 model=route.creds["model"], max_iterations=max_iterations, task_count=len(task_list),
                 parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **_route_overrides(route),
-                **baseline_kwargs,
+                **{**(child_extra or {}), **baseline_kwargs},
             )
         except ValueError as exc:
             # An owner refusal can land mid-batch: the siblings built so far hold reservations.
