@@ -60,6 +60,17 @@ def session_busy_mode(runner, live):
     return session_busy_state(runner, live)[0]
 
 
+def set_dispatch_busy_override(runner, live, mode):
+    """``/busy <mode>`` on a dispatcher session sets only this session's override: the ladder's default for
+    the session is not a user preference, so ``display.busy_input_mode`` (every other session's mode) is not
+    rewritten. True when handled here."""
+    from gateway.session_policy import policy_for_source
+    if live is None or not dispatch_policy(policy_for_source(runner, live.source)):
+        return False
+    live.busy_input_mode = mode
+    return True
+
+
 def local_live_for_route(runner, session_key):
     """The local ``LiveSession`` whose route is ``session_key``, else None."""
     if not session_key:

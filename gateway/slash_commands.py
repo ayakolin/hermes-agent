@@ -1020,6 +1020,11 @@ class GatewaySlashCommandsMixin(
         if arg not in _BUSY_MODE_BEHAVIOR:
             return EphemeralReply(t("gateway.busy.unknown_mode", arg=arg))
 
+        from gateway.session_setting_commands import set_dispatch_busy_override
+        if set_dispatch_busy_override(self, live, arg):
+            # The status line, not ``busy.set`` (which says "saved"): nothing was written to config.yaml.
+            return EphemeralReply(t("gateway.busy.status", mode=arg, behavior=t(_BUSY_MODE_BEHAVIOR[arg][1])))
+
         # Persist before mutate
         from cli import save_config_value
         if not save_config_value("display.busy_input_mode", arg):
