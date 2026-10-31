@@ -178,7 +178,8 @@ def prepare_iteration(
     # break the prompt cache — same contract as apply_pending_steer_to_tool_results).
     _pre_api_steer = agent._drain_pending_steer()
     if _pre_api_steer:
-        _inject_steer_after_newest_tool_result(agent, messages, _pre_api_steer)
+        _inject_steer_after_newest_tool_result(
+            agent, messages, _pre_api_steer, _current_turn_start(messages, user_message, current_turn_user_idx))
 
     # One-shot run-budget wrap-up notice at 80% of agent.run_budget_seconds, appended to the
     # newest tool result; off with no budget.
@@ -281,10 +282,28 @@ def _previous_tool_round(messages: Any) -> list:
     return []
 
 
-def _inject_steer_after_newest_tool_result(agent: Any, messages: Any, steer_text: str) -> None:
-    """Append the steer marker as a standalone user row after the newest tool message; with no
-    tool message, put the text back so the post-tool-execution drain delivers it later."""
-    for _si in range(len(messages) - 1, -1, -1):
+def _current_turn_start(messages: Any, user_message: Any, idx: Any) -> Any:
+    """Index of this turn's user row, checked against ``messages`` (a compaction since ``idx`` was
+    recorded moves it); ``len(messages)`` when the row cannot be found, so no tool row counts as this
+    turn's; ``idx`` as given when the caller has no turn text to check it against."""
+    if user_message is None or _anchors_current_turn(messages, idx, user_message):
+        return idx
+    from agent.turn_context import reanchor_current_turn_user_idx
+
+    found = reanchor_current_turn_user_idx(messages, user_message)
+    return found if found >= 0 else len(messages)
+
+
+def _inject_steer_after_newest_tool_result(
+    agent: Any, messages: Any, steer_text: str, turn_start: Any = None
+) -> None:
+    """Append the steer marker as a standalone user row after the newest tool message of THIS turn
+    (rows after ``turn_start``; unbounded when it is None). The newest tool row of the whole history
+    can belong to a finished older turn, and a row spliced after it lands before that turn's closing
+    answer and moves the cached prefix. With no tool message of this turn, put the text back so the
+    post-tool-execution drain, or the finalizer's next-turn handoff, delivers it later."""
+    floor = turn_start + 1 if isinstance(turn_start, int) and turn_start >= 0 else 0
+    for _si in range(len(messages) - 1, floor - 1, -1):
         _sm = messages[_si]
         if isinstance(_sm, dict) and _sm.get("role") == "tool":
             from agent.prompt_builder import steer_user_row
