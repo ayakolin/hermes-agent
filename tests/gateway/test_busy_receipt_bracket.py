@@ -151,6 +151,22 @@ async def test_a_burst_whose_commit_fails_closes_its_mark_as_failed(tmp_path, mo
         assert r.adapter.calls == [('start', 'p1'), ('complete', 'p1', ProcessingOutcome.FAILURE)]
 
 
+@pytest.mark.asyncio
+async def test_a_message_cancelled_while_it_waits_for_the_earlier_commit_closes_its_mark(tmp_path, monkeypatch):
+    """No observer exists yet at that point, so nothing else would ever close the mark."""
+    async with rig(tmp_path, monkeypatch, CONFIG, StandInAgent(), reacting_adapter_class()) as r:
+        earlier = asyncio.get_running_loop().create_future()  # the route's earlier commit, still pending
+        r.adapter.__dict__.setdefault('_shared_burst_commits', {})[r.key] = earlier
+        waiting = asyncio.create_task(dispatch_busy_burst(r.adapter, r.event('hello'), r.key))
+        await async_wait_until(lambda: r.adapter.calls == [('start', 'm1')], timeout=10, what='the mark to open')
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        await async_wait_until(lambda: len(r.adapter.calls) == 2, timeout=10, what='the mark to close')
+        assert r.adapter.calls[1] == ('complete', 'm1', ProcessingOutcome.CANCELLED)
+        earlier.cancel()
+
+
 def _unauthorized(r):
     return r.adapter.build_source(chat_id='99999@s.whatsapp.net', user_id='99999@s.whatsapp.net', chat_type='dm')
 

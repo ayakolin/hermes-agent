@@ -111,21 +111,20 @@ async def dispatch_busy_burst(adapter, event, session_key):
 
 
 async def _dispatch_unmerged(adapter, event, session_key, previous):
-    """A busy input that merges with nothing, committed after the route's earlier commit. Once its
-    observer runs, that observer closes the receipt; an input that never got that far closes it here."""
+    """A busy input that merges with nothing, committed after the route's earlier commit. From
+    ``dispatch_shared_busy`` on, its observer owns the receipt and closes it on every path (a caller
+    cancelled after acceptance must not end the mark of a message that is still answered); only the wait
+    for the earlier commit has no observer yet."""
     from gateway.platforms.event import ProcessingOutcome
     from gateway.session_ingress import dispatch_shared_busy
     from gateway.session_receipt import close_receipt
-    try:
-        if previous is not None:
+    if previous is not None:
+        try:
             await asyncio.wait({previous})
-        return await dispatch_shared_busy(adapter, event, session_key)
-    except asyncio.CancelledError:
-        close_receipt(event, ProcessingOutcome.CANCELLED)
-        raise
-    except Exception:
-        close_receipt(event, ProcessingOutcome.FAILURE)
-        raise
+        except asyncio.CancelledError:
+            close_receipt(event, ProcessingOutcome.CANCELLED)
+            raise
+    return await dispatch_shared_busy(adapter, event, session_key)
 
 
 async def _accepted(adapter, burst, event):
