@@ -494,9 +494,12 @@ class CLIChatTurnMixin:
                 # stop_event kills the runaway worker.
                 turn.tts_normal_exit = not turn.tts_thread.is_alive()
         # Drain the StdoutProxy buffer so tool/status lines render ABOVE the response
-        # box; the sleep lets the renderer paint before we draw.
+        # box; the sleep lets the renderer paint before we draw. A turn already waiting
+        # (a gateway notification, a typed follow-up) owns the next repaint, so the
+        # barrier would only delay it.
         sys.stdout.flush()
-        time.sleep(0.15)
+        if self._pending_input.empty():
+            time.sleep(0.15)
         if turn.result:
             self.conversation_history = turn.result.get("messages", self.conversation_history)
         # Mid-turn auto-compression continues in a child session: sync so /status, /resume,

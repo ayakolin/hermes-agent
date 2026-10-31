@@ -215,10 +215,13 @@ class CLITuiRuntimeMixin:
             self._recover_terminal_after_interrupt()
 
         # Re-queue any messages that arrived in _interrupt_queue while the agent was running and were never
-        # claimed by the explicit interrupt path. See _drain_interrupt_queue_to_pending_input for the full
-        # rationale. Regression of #17666 / #18760 — the drain block from the original PR #17939 was
-        # deferred as "worth its own review" and never re-landed (#20271).
+        # claimed by the explicit interrupt path (regression of #17666 / #18760), then a gateway turn that
+        # completed during this one (a notification header, an adopted /queue prompt): it runs before a goal
+        # continuation or loop tick, which would otherwise start another turn in front of the reply the user
+        # is waiting on.
         self._drain_interrupt_queue_to_pending_input()
+        with suppress(Exception):
+            self._drain_process_notifications("cli-post-turn")
 
         # /goal continuation (queued user input still preempts), then /loop tick completion.
         for hook, what in (
@@ -245,9 +248,6 @@ class CLITuiRuntimeMixin:
                 except Exception as e:
                     _cprint(f"{_DIM}{t('cli.voice.autorestart_failed', error=e)}{_RST}")
             threading.Thread(target=_restart_recording, daemon=True).start()
-
-        with suppress(Exception):
-            self._drain_process_notifications("cli-post-turn")
 
     def _tui_signal_handler(self, signum, frame):
         """SIGHUP/SIGTERM -> graceful shutdown.
