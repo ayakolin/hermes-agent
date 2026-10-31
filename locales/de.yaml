@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[{count} Bilder angehängt]"
     queued_next_turn: "Für den nächsten Zug eingereiht: {preview}"
     redirected_turn: "↪ Aktueller Zug umgelenkt: '{preview}'"
+    redirect_unknown: "Der Redirect wurde nicht bestätigt ({reason}); er ist möglicherweise bereits im laufenden Turn – prüfe /queue list, bevor du ihn erneut sendest."
     model_selection_failed: "✗ Modellauswahl fehlgeschlagen: {error}"
     auto_attached_image: "📎 Bild automatisch angehängt: {name}"
     detected_file: "📄 Datei erkannt: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ Steer eingereiht — kommt nach dem nächsten Tool-Aufruf an: {preview}"
     rejected_empty: "Steer abgelehnt (leere Nutzlast)."
     no_agent_queued: "Kein Agent läuft; als nächster Zug eingereiht: {preview}"
+    unknown: "Der Steer wurde nicht bestätigt ({reason}); er ist möglicherweise bereits im laufenden Turn – prüfe /queue list, bevor du ihn erneut sendest."
   title:
     session_id: "Sitzungs-ID: {session_id}"
     current: "Titel: {title}"

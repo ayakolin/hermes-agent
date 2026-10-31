@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[прикріплено зображень: {count}]"
     queued_next_turn: "У черзі на наступний хід: {preview}"
     redirected_turn: "↪ Поточний хід перенаправлено: '{preview}'"
+    redirect_unknown: "Переспрямування не підтверджено ({reason}); воно могло вже потрапити в поточний хід — перевірте /queue list, перш ніж надсилати ще раз."
     model_selection_failed: "✗ Не вдалося вибрати модель: {error}"
     auto_attached_image: "📎 Автоматично прикріплено зображення: {name}"
     detected_file: "📄 Виявлено файл: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ Скерування в черзі — надійде після наступного виклику інструмента: {preview}"
     rejected_empty: "Скерування відхилено (порожній вміст)."
     no_agent_queued: "Агент не запущений; поставлено в чергу як наступний хід: {preview}"
+    unknown: "Керування не підтверджено ({reason}); воно могло вже потрапити в поточний хід — перевірте /queue list, перш ніж надсилати ще раз."
   title:
     session_id: "ID сеансу: {session_id}"
     current: "Назва: {title}"

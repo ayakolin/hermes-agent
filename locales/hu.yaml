@@ -2169,6 +2169,7 @@ cli:
     images_attached_preview_other: "[{count} kép csatolva]"
     queued_next_turn: "Sorba állítva a következő körre: {preview}"
     redirected_turn: "↪ Jelenlegi kör átirányítva: '{preview}'"
+    redirect_unknown: "Az átirányítás nem lett visszaigazolva ({reason}); lehet, hogy már a futó körben van – újraküldés előtt nézd meg a /queue list parancsot."
     model_selection_failed: "✗ A modell kiválasztása nem sikerült: {error}"
     auto_attached_image: "📎 Automatikusan csatolt kép: {name}"
     detected_file: "📄 Észlelt fájl: {name}"
@@ -2442,6 +2443,7 @@ cli:
     queued: "⏩ Irányítás sorba állítva — a következő eszközhívás után érkezik: {preview}"
     rejected_empty: "Irányítás elutasítva (üres tartalom)."
     no_agent_queued: "Nem fut ügynök; sorba állítva következő körként: {preview}"
+    unknown: "A steer nem lett visszaigazolva ({reason}); lehet, hogy már a futó körben van – újraküldés előtt nézd meg a /queue list parancsot."
   title:
     session_id: "Munkamenet-azonosító: {session_id}"
     current: "Cím: {title}"

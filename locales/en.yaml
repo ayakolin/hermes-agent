@@ -2248,6 +2248,7 @@ cli:
     images_attached_preview_other: "[{count} images attached]"
     queued_next_turn: "Queued for the next turn: {preview}"
     redirected_turn: "↪ Redirected current turn: '{preview}'"
+    redirect_unknown: "The owner did not confirm the redirect ({reason}); it may already be in the running turn — check /queue list before resending."
     model_selection_failed: "✗ Model selection failed: {error}"
     auto_attached_image: "📎 Auto-attached image: {name}"
     detected_file: "📄 Detected file: {name}"
@@ -2524,6 +2525,7 @@ cli:
     failed: "Steer failed: {error}"
     queued: "⏩ Steer queued — arrives after the next tool call: {preview}"
     rejected_empty: "Steer rejected (empty payload)."
+    unknown: "The owner did not confirm the steer ({reason}); it may already be in the running turn — check /queue list before resending."
     no_agent_queued: "No agent running; queued as next turn: {preview}"
   title:
     session_id: "Session ID: {session_id}"

@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[{count} صور مرفقة]"
     queued_next_turn: "في قائمة الانتظار للدور التالي: {preview}"
     redirected_turn: "↪ أُعيد توجيه الدور الحالي: '{preview}'"
+    redirect_unknown: "لم يتم تأكيد إعادة التوجيه ({reason})؛ ربما وصل بالفعل إلى الدور الجاري — تحقق من /queue list قبل إعادة الإرسال."
     model_selection_failed: "✗ فشل اختيار النموذج: {error}"
     auto_attached_image: "📎 صورة مرفقة تلقائيًا: {name}"
     detected_file: "📄 تم اكتشاف ملف: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ التوجيه في قائمة الانتظار — يصل بعد استدعاء الأداة التالي: {preview}"
     rejected_empty: "رُفض التوجيه (المحتوى فارغ)."
     no_agent_queued: "لا يوجد وكيل قيد التشغيل؛ أُضيف كدور تالٍ في قائمة الانتظار: {preview}"
+    unknown: "لم يتم تأكيد التوجيه ({reason})؛ ربما وصل بالفعل إلى الدور الجاري — تحقق من /queue list قبل إعادة الإرسال."
   title:
     session_id: "معرّف الجلسة: {session_id}"
     current: "العنوان: {title}"

@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[{count} immagini allegate]"
     queued_next_turn: "In coda per il prossimo turno: {preview}"
     redirected_turn: "↪ Turno corrente reindirizzato: '{preview}'"
+    redirect_unknown: "Il redirect non è stato confermato ({reason}); potrebbe essere già nel turno in corso — controlla /queue list prima di reinviarlo."
     model_selection_failed: "✗ Selezione del modello non riuscita: {error}"
     auto_attached_image: "📎 Immagine allegata automaticamente: {name}"
     detected_file: "📄 File rilevato: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ Indirizzamento in coda — arriverà dopo la prossima chiamata a uno strumento: {preview}"
     rejected_empty: "Indirizzamento rifiutato (contenuto vuoto)."
     no_agent_queued: "Nessun agente in esecuzione; messo in coda come prossimo turno: {preview}"
+    unknown: "Lo steer non è stato confermato ({reason}); potrebbe essere già nel turno in corso — controlla /queue list prima di reinviarlo."
   title:
     session_id: "ID sessione: {session_id}"
     current: "Titolo: {title}"

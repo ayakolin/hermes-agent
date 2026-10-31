@@ -1473,71 +1473,16 @@ class CLITuiMixin:
         return True
 
     def _tui_enter_while_busy(self, text: str, images: list, payload, mode: str | None = None) -> None:
-        """Route a submission typed while the agent runs, per ``busy_input_mode``.
+        """Route a submission typed while the agent runs (CLIBusyInputMixin: one ordered submit path).
 
-        steer → agent.steer(text) mid-run (images can't ride along; a missing/rejecting steer() falls back
-        to queue). interrupt → agent.redirect() when supported, else the legacy interrupt queue. queue →
-        next turn: text-only on the gateway's session is a ``/queue`` FIFO admission (#134889 N5)."""
-        from cli import CLI_CONFIG, _ACCENT, _DIM, _RST, _cprint, _hermes_home
-        _effective_mode = mode or self.busy_input_mode
-        redirected = False
-        if _effective_mode == "steer":
-            if images or not text:
-                _effective_mode = "queue"
-            else:
-                accepted = False
-                try:
-                    if self.agent is not None and hasattr(self.agent, "steer"):
-                        accepted = self.agent.steer(text)
-                except Exception as exc:
-                    _cprint(f"  {_DIM}{t('cli.tui.steer_failed_queued', error=exc)}{_RST}")
-                    accepted = False
-                if accepted == "voice_stopped":  # TUI-26: consumed as a voice stop; nothing to queue
-                    return
-                if accepted:
-                    preview = text[:80] + ("..." if len(text) > 80 else "")
-                    _cprint(f"  {_ACCENT}{t('cli.tui.steered', preview=preview)}{_RST}")
-                else:
-                    _effective_mode = "queue"
-        if _effective_mode == "queue" and text and not images and self._gateway_queue_store() is not None:
-            self._queue_enqueue(text)
-        elif _effective_mode == "queue":
-            self._pending_input.put(payload)
-            preview = text if text else _tn("cli.tui.images_attached_preview", len(images))
-            preview = preview[:80] + ('...' if len(preview) > 80 else '')
-            _cprint("  " + t("cli.tui.queued_next_turn", preview=preview))
-        elif _effective_mode == "interrupt":
-            if not images and text:
-                try:
-                    if (
-                        self.agent is not None
-                        and getattr(self.agent, "_supports_active_turn_redirect", False) is True
-                        and hasattr(self.agent, "redirect")):
-                        redirected = self.agent.redirect(text)
-                except Exception:
-                    redirected = False
-            if redirected == "voice_stopped":  # TUI-26: consumed as a voice stop; nothing to queue
-                return
-            if redirected:
-                preview = text[:80] + ("..." if len(text) > 80 else "")
-                _cprint(f"  {_ACCENT}{t('cli.tui.redirected_turn', preview=preview)}{_RST}")
-            else:
-                self._interrupt_queue.put(payload)
-                try:
-                    with open(_hermes_home / "interrupt_debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(
-                            f"{time.strftime('%H:%M:%S')} ENTER: queued interrupt msg={str(payload)[:60]!r}, "
-                            f"agent_running={self._agent_running}\n")
-                except Exception:
-                    pass
-        # First-touch onboarding: one-line tip about the /busy knob on the first busy-while-
-        # running event for this install; the flag persists to config.yaml. Guarded so
-        # onboarding can never break the input loop.
+        Dispatcher sessions resolve the ladder through a serial worker (never on the key thread); the rest
+        keep main's steer / interrupt / queue routing. The onboarding tip fires on the first busy event."""
+        from cli import CLI_CONFIG, _DIM, _RST, _cprint, _hermes_home
+        outcome = self._busy_submit(text, images, payload, mode)
         try:
             from agent.onboarding import BUSY_INPUT_FLAG, busy_input_hint_cli, is_seen, mark_seen
             if not is_seen(CLI_CONFIG, BUSY_INPUT_FLAG):
-                _hint_mode = "redirect" if redirected else _effective_mode
-                _cprint(f"  {_DIM}{busy_input_hint_cli(_hint_mode)}{_RST}")
+                _cprint(f"  {_DIM}{busy_input_hint_cli(outcome or 'queue')}{_RST}")
                 mark_seen(_hermes_home / "config.yaml", BUSY_INPUT_FLAG)
                 CLI_CONFIG.setdefault("onboarding", {}).setdefault("seen", {})[BUSY_INPUT_FLAG] = True
         except Exception:

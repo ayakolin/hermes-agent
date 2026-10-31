@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[{count} görsel eklendi]"
     queued_next_turn: "Sonraki tur için sıraya alındı: {preview}"
     redirected_turn: "↪ Geçerli tur yönlendirildi: '{preview}'"
+    redirect_unknown: "Yeniden yönlendirme onaylanmadı ({reason}); hâlihazırda çalışan tura girmiş olabilir — yeniden göndermeden önce /queue list komutunu kontrol edin."
     model_selection_failed: "✗ Model seçimi başarısız oldu: {error}"
     auto_attached_image: "📎 Görsel otomatik eklendi: {name}"
     detected_file: "📄 Dosya algılandı: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ Yönlendirme sıraya alındı — sonraki araç çağrısından sonra ulaşır: {preview}"
     rejected_empty: "Yönlendirme reddedildi (boş içerik)."
     no_agent_queued: "Çalışan ajan yok; sonraki tur olarak sıraya alındı: {preview}"
+    unknown: "Yönlendirme onaylanmadı ({reason}); hâlihazırda çalışan tura girmiş olabilir — yeniden göndermeden önce /queue list komutunu kontrol edin."
   title:
     session_id: "Oturum kimliği: {session_id}"
     current: "Başlık: {title}"

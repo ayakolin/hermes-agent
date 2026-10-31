@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[{count} imagens anexadas]"
     queued_next_turn: "Enfileirado para o próximo turno: {preview}"
     redirected_turn: "↪ Turno atual redirecionado: '{preview}'"
+    redirect_unknown: "O redirecionamento não foi confirmado ({reason}); ele pode já estar no turno em execução — verifique /queue list antes de reenviar."
     model_selection_failed: "✗ Falha na seleção de modelo: {error}"
     auto_attached_image: "📎 Imagem anexada automaticamente: {name}"
     detected_file: "📄 Arquivo detectado: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ Redirecionamento enfileirado — chega após a próxima chamada de ferramenta: {preview}"
     rejected_empty: "Redirecionamento rejeitado (conteúdo vazio)."
     no_agent_queued: "Nenhum agente em execução; enfileirado como próximo turno: {preview}"
+    unknown: "O steer não foi confirmado ({reason}); ele pode já estar no turno em execução — verifique /queue list antes de reenviar."
   title:
     session_id: "ID da sessão: {session_id}"
     current: "Título: {title}"

@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[{count} íomhá ceangailte]"
     queued_next_turn: "Curtha i scuaine don chéad seal eile: {preview}"
     redirected_turn: "↪ Atreoraíodh an seal reatha: '{preview}'"
+    redirect_unknown: "Níor deimhníodh an t-athsheoladh ({reason}); b’fhéidir go bhfuil sé sa seal atá ar siúl cheana — seiceáil /queue list sula seolann tú arís é."
     model_selection_failed: "✗ Theip ar roghnú samhla: {error}"
     auto_attached_image: "📎 Íomhá ceangailte go huathoibríoch: {name}"
     detected_file: "📄 Comhad braite: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ Stiúradh i scuaine — tagann sé tar éis an chéad ghlao uirlise eile: {preview}"
     rejected_empty: "Diúltaíodh don stiúradh (pálasta folamh)."
     no_agent_queued: "Níl aon ghníomhaire ag rith; curtha i scuaine mar an chéad seal eile: {preview}"
+    unknown: "Níor deimhníodh an stiúradh ({reason}); b’fhéidir go bhfuil sé sa seal atá ar siúl cheana — seiceáil /queue list sula seolann tú arís é."
   title:
     session_id: "ID Seisiúin: {session_id}"
     current: "Teideal: {title}"

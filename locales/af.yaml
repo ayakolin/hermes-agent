@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[{count} beelde aangeheg]"
     queued_next_turn: "In tou geplaas vir die volgende beurt: {preview}"
     redirected_turn: "↪ Huidige beurt herlei: '{preview}'"
+    redirect_unknown: "Die herleiding is nie bevestig nie ({reason}); dit is dalk reeds in die lopende beurt — kyk na /queue list voordat jy dit weer stuur."
     model_selection_failed: "✗ Modelkeuse het misluk: {error}"
     auto_attached_image: "📎 Beeld outomaties aangeheg: {name}"
     detected_file: "📄 Lêer bespeur: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ Stuur in tou geplaas — kom na die volgende gereedskapsoproep aan: {preview}"
     rejected_empty: "Stuur verwerp (leë inhoud)."
     no_agent_queued: "Geen agent loop nie; as volgende beurt in tou geplaas: {preview}"
+    unknown: "Die stuur is nie bevestig nie ({reason}); dit is dalk reeds in die lopende beurt — kyk na /queue list voordat jy dit weer stuur."
   title:
     session_id: "Sessie-ID: {session_id}"
     current: "Titel: {title}"

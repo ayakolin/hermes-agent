@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[画像 {count} 件を添付]"
     queued_next_turn: "次のターンのキューに追加しました: {preview}"
     redirected_turn: "↪ 現在のターンをリダイレクトしました: '{preview}'"
+    redirect_unknown: "リダイレクトが届いたか確認できません（{reason}）。すでに実行中のターンに入っている可能性があります。再送する前に /queue list を確認してください。"
     model_selection_failed: "✗ モデルの選択に失敗しました: {error}"
     auto_attached_image: "📎 画像を自動添付しました: {name}"
     detected_file: "📄 ファイルを検出しました: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ ステアをキューに追加しました — 次のツール呼び出しの後に届きます: {preview}"
     rejected_empty: "ステアを拒否しました（内容が空です）。"
     no_agent_queued: "実行中のエージェントがないため、次のターンとしてキューに追加しました: {preview}"
+    unknown: "ステアが届いたか確認できません（{reason}）。すでに実行中のターンに入っている可能性があります。再送する前に /queue list を確認してください。"
   title:
     session_id: "セッション ID: {session_id}"
     current: "タイトル: {title}"

@@ -2416,6 +2416,7 @@ cli:
     images_attached_preview_other: "[{count} images jointes]"
     queued_next_turn: "Mis en file pour le prochain tour : {preview}"
     redirected_turn: "↪ Tour en cours redirigé : '{preview}'"
+    redirect_unknown: "La redirection n’a pas été confirmée ({reason}) ; elle est peut-être déjà dans le tour en cours — vérifiez /queue list avant de la renvoyer."
     model_selection_failed: "✗ Échec de la sélection du modèle : {error}"
     auto_attached_image: "📎 Image jointe automatiquement : {name}"
     detected_file: "📄 Fichier détecté : {name}"
@@ -2698,6 +2699,7 @@ cli:
     queued: "⏩ Consigne mise en file — transmise après le prochain appel d'outil : {preview}"
     rejected_empty: "Consigne refusée (contenu vide)."
     no_agent_queued: "Aucun agent en cours ; mis en file pour le prochain tour : {preview}"
+    unknown: "Le steer n’a pas été confirmé ({reason}) ; il est peut-être déjà dans le tour en cours — vérifiez /queue list avant de le renvoyer."
   title:
     session_id: "ID de session : {session_id}"
     current: "Titre : {title}"

@@ -874,6 +874,9 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         self._restore_session_cwd(session_meta)
         self._restore_session_yolo(session_meta)
         self._restore_session_model(session_meta)
+        # A resumed session may be a dispatcher session with its own busy mode and route.
+        with suppress(Exception):
+            self._mirror_server_busy()
 
     def _resolve_resume_target(self, target: str):
         """``(session_id, meta)`` for a numbered selection, title, or id (an empty compression-chain head

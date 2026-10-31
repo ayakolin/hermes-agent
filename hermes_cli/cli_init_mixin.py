@@ -472,6 +472,10 @@ class CLIInitMixin:
             if sid and sid != self.session_id:
                 self.session_id = sid
                 getattr(self, "_write_terminal_breadcrumb", lambda: None)()
+            # The owner resolves this session's busy mode (redirect-first for a dispatcher session): the
+            # CLI reads it instead of trusting its own startup config.
+            with suppress(Exception):
+                self._mirror_server_busy()
 
     def _new_session_id(self, now, *, branch_of=None, title=None):
         """The id main mints for /new (``new_session_id``) and /branch (``mint_session_id``). On a gateway
@@ -507,6 +511,11 @@ class CLIInitMixin:
         from cli import CLI_CONFIG, _status_bar_visible_from_display_config
         self._pending_input = queue.Queue()
         self._interrupt_queue = queue.Queue()
+        # The classic CLI's ordered busy path (hermes_cli/cli_busy_input_mixin.py): a dispatcher session
+        # resolves its corrections through one serial worker and never writes _interrupt_queue.
+        self._busy_dispatch = False
+        self._busy_worker = None
+        self._busy_worker_thread = None
         self._agent_running = self._should_exit = False
         self._detach_on_exit = False  # Ctrl+D mid-turn: leave the gateway turn running (LC-6b)
         self._last_turn_interrupted = False  # /goal never auto-queues on a Ctrl+C'd turn

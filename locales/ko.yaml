@@ -2152,6 +2152,7 @@ cli:
     images_attached_preview_other: "[이미지 {count}개 첨부됨]"
     queued_next_turn: "다음 턴 대기열에 추가됨: {preview}"
     redirected_turn: "↪ 현재 턴 방향 변경: '{preview}'"
+    redirect_unknown: "리디렉션이 확인되지 않았습니다({reason}). 이미 실행 중인 턴에 들어갔을 수 있으니 다시 보내기 전에 /queue list를 확인하세요."
     model_selection_failed: "✗ 모델 선택 실패: {error}"
     auto_attached_image: "📎 이미지 자동 첨부: {name}"
     detected_file: "📄 파일 감지됨: {name}"
@@ -2425,6 +2426,7 @@ cli:
     queued: "⏩ 조정 지시가 대기열에 추가됐어요 — 다음 도구 호출 후에 전달돼요: {preview}"
     rejected_empty: "조정이 거부됐어요 (내용이 비어 있음)."
     no_agent_queued: "실행 중인 에이전트가 없어 다음 턴으로 대기열에 추가했어요: {preview}"
+    unknown: "스티어가 확인되지 않았습니다({reason}). 이미 실행 중인 턴에 들어갔을 수 있으니 다시 보내기 전에 /queue list를 확인하세요."
   title:
     session_id: "세션 ID: {session_id}"
     current: "제목: {title}"

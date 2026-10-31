@@ -15,6 +15,7 @@ included) with this session's toolsets marked (gateway/session_info_reads.py).
 from __future__ import annotations
 
 import shlex
+from contextlib import suppress
 
 # Canonical command -> mirror(cli, arg) run after the owner applied it (None: nothing local).
 _BUSY_MODES = frozenset({"queue", "steer", "interrupt"})
@@ -23,6 +24,10 @@ _BUSY_MODES = frozenset({"queue", "steer", "interrupt"})
 def _mirror_busy(cli, arg):
     if arg.lower() in _BUSY_MODES:
         cli.busy_input_mode = arg.lower()
+    # The owner also decides HOW the CLI routes a refused correction (a dispatcher session: queued, never a
+    # hard interrupt), so the route is read back rather than inferred from the argument.
+    with suppress(Exception):
+        cli._mirror_server_busy()
 
 
 def _watch_reviewer(cli, _arg):

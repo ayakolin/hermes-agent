@@ -364,26 +364,33 @@ class CLILoopsMixin:
             items = list(gateway_queue.queued_rows(self, store))
         return items + [(None, item) for item in self._pending_input_items()]
 
-    def _queue_enqueue(self, text: str) -> None:
+    def _queue_enqueue(self, text: str, *, running: bool | None = None) -> bool:
+        """Queue next turn: the owner's FIFO while a turn runs (or ``running`` says one did), else local.
+        True when the owner holds it (or may: an unanswered submit), False when nothing was queued."""
         from cli import _cprint
         payload = self._expand_paste_references(text)
-        store = self._gateway_queue_store() if self._agent_running else None
+        if running is None:
+            running = bool(self._agent_running)
+        store = self._gateway_queue_store() if running else None
+        admitted = False
         if store is not None:
             # #134889 N5: the gateway's durable FIFO holds it (committed at accept, kept across an owner
             # restart, run once after the current turn), never this process.
             from hermes_cli import gateway_queue
             try:
                 gateway_queue.submit_queued(self, store, payload)
+                admitted = True
             except gateway_queue.QueueOutcomeUnknown as exc:  # sent, no answer: it may be queued
                 _cprint(f"  {t('cli.queue.submit_unknown', error=exc)}")
-                return
+                admitted = True
             except GatewayClientError as exc:  # the owner refused, or it was never sent: nothing is held here
                 _cprint(f"  {t('cli.queue.gateway_refused', error=exc)}")
-                return
+                return False
         else:
             self._pending_input.put(payload)
-        key = "cli.queue.queued_next_turn" if self._agent_running else "cli.queue.queued"
+        key = "cli.queue.queued_next_turn" if running else "cli.queue.queued"
         _cprint(f"  {t(key, preview=_preview(payload))}")
+        return admitted
 
     def _queue_list(self, rest: str) -> None:
         from cli import _VoiceInputMessage, _cprint
@@ -542,24 +549,38 @@ class CLILoopsMixin:
         # agent runs, push into its pending_steer slot (drained by _execute_tool_calls_*
         # into the next tool result); otherwise fall back to /queue semantics.
         from cli import _cprint, _slash_args
+        from hermes_cli.gateway_agent import Unknown
         payload = _slash_args(cmd_original)
         if not payload:
             _cprint(f"  {t('cli.steer.usage')}")
-        elif self._agent_running and self.agent is not None and hasattr(self.agent, "steer"):
-            try:
-                accepted = self.agent.steer(payload)
-            except Exception as exc:
-                _cprint(f"  {t('cli.steer.failed', error=exc)}")
-            else:
-                if accepted == "voice_stopped":  # TUI-26: the owner ended the voice chat; consumed
-                    pass
-                elif accepted:
-                    _cprint(f"  {t('cli.steer.queued', preview=_preview(payload))}")
-                else:
-                    _cprint(f"  {t('cli.steer.rejected_empty')}")
-        else:
+            return
+        if not (self._agent_running and self.agent is not None and hasattr(self.agent, "steer")):
             self._pending_input.put(payload)
             _cprint(f"  {t('cli.steer.no_agent_queued', preview=_preview(payload))}")
+            return
+        try:
+            accepted = self.agent.steer(payload)
+        except Exception as exc:
+            _cprint(f"  {t('cli.steer.failed', error=exc)}")
+            return
+        if accepted == "voice_stopped":  # TUI-26: the owner ended the voice chat; consumed
+            return
+        if accepted:
+            _cprint(f"  {t('cli.steer.queued', preview=_preview(payload))}")
+            return
+        if isinstance(accepted, Unknown):
+            # Sent, outcome unknown: it may already sit in the running turn. Never claim it was queued.
+            _cprint(f"  {t('cli.steer.unknown', reason=accepted.reason)}")
+            return
+        # A refusal the owner marks undelivered is queued as the next turn (the old reply printed
+        # 'rejected' and dropped the text). Its own line says where it went.
+        running = getattr(self, "_agent_running", False)
+        running = bool(running() if callable(running) else running)
+        if accepted is not None and getattr(accepted, "undelivered", False) is False:
+            _cprint(f"  {t('cli.steer.rejected_empty')}")
+            return
+        if not self._queue_enqueue(payload, running=running):
+            _cprint(f"  {t('cli.steer.rejected_empty')}")
 
     # ────────────────────────────────────────────────────────────────
     # Session-bound managers: /goal (Ralph-style loop), /heartbeat, /loop
