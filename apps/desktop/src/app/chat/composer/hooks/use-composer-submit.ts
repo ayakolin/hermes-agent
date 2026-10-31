@@ -370,10 +370,11 @@ export function useComposerSubmit({
       // next tool boundary, queue admits it as the next turn. If the turn
       // already ended, steerDraft re-queues so nothing is lost. Compaction is
       // the gateway's call: it answers `queued` under the compression lock.
-      // Unloaded policy (null) must not turn an intended queue into an interrupt.
-      if (busyInputMode === 'queue') {
+      // An unloaded policy (null) queues: it never turns an intended queue into an interrupt, and it never
+      // leaves Enter dead (the old branch returned true having neither sent nor cleared the draft).
+      if (busyInputMode === 'queue' || busyInputMode === null) {
         queueCurrentDraft()
-      } else if (busyInputMode !== null) {
+      } else {
         steerDraft(busyInputMode)
       }
     } else if (payloadPresent) {

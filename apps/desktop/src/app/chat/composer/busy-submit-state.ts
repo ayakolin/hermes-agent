@@ -30,9 +30,9 @@ export function deriveBusySubmitState({
   hasSteerHandler,
   isSteerableText
 }: BusySubmitInputs): BusySubmitState {
-  const canSubmit =
-    (busy || hasComposerPayload) &&
-    !(busy && isSteerableText && attachmentCount === 0 && !compacting && !blockingPrompt && busyInputMode === null)
+  // An unloaded busy policy (null) is a queue, not a dead Send: the submit hook takes that branch and queues
+  // the draft, so the button must stay enabled while the policy is still being read.
+  const canSubmit = busy || hasComposerPayload
 
   // Steer only makes sense mid-turn, text-only (the gateway can't carry images
   // into a tool result) and never for a slash command (those execute inline).
@@ -41,9 +41,10 @@ export function deriveBusySubmitState({
   // Compaction does not: the gateway holds the correction until it finishes.
   const canSteer = busy && !blockingPrompt && hasSteerHandler && attachmentCount === 0 && isSteerableText
 
-  // Ordinary busy Send follows backend policy; attachments queue and empty stops.
+  // Ordinary busy Send follows backend policy; attachments queue and empty stops. Null is a queue too,
+  // matching what the submit hook does with it (never an unintended interrupt).
   const busyAction: ComposerBusyAction = canSteer
-    ? (busyInputMode ?? 'interrupt')
+    ? (busyInputMode ?? 'queue')
     : compacting || hasComposerPayload
       ? 'queue'
       : 'stop'

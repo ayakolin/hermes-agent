@@ -466,9 +466,10 @@ describe('useComposerSubmit busy-turn routing', () => {
           expect(ordinary.queueCurrentDraft).toHaveBeenCalledOnce()
           expect(ordinary.onSteer).not.toHaveBeenCalled()
         } else if (mode === null) {
-          expect(ordinary.clearDraft).not.toHaveBeenCalled()
+          // An unloaded busy policy is a queue, never a dead Enter: the old branch returned true having done
+          // nothing, so the draft was neither sent nor cleared.
+          expect(ordinary.queueCurrentDraft).toHaveBeenCalledOnce()
           expect(ordinary.onSteer).not.toHaveBeenCalled()
-          expect(ordinary.queueCurrentDraft).not.toHaveBeenCalled()
         } else {
           await waitFor(() => expect(ordinary.onSteer).toHaveBeenCalledWith('change course', mode))
           expect(ordinary.queueCurrentDraft).not.toHaveBeenCalled()
