@@ -59,6 +59,7 @@ def _recover_unreachable_compute_host_turn(sid: str, session: dict, inflight_at_
         inflight_now = session.get("inflight_turn")
         if not pending and session.get("running") and inflight_now is not None and inflight_now is inflight_at_interrupt:
             session["running"] = False
+            session.pop("_turn_automation", None)
             _clear_inflight_turn(session)
     _clear_pending(sid)
     with contextlib.suppress(Exception):

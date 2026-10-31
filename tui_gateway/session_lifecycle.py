@@ -819,6 +819,7 @@ def _interrupt_session_turn(
             with session["history_lock"]:
                 if session.get("running"):
                     session["running"] = False
+                    session.pop("_turn_automation", None)
                     _clear_inflight_turn(session)
     # Sibling of the #102895 finalize-path fix above: an explicit /stop (or the WS-orphan reaper's
     # interrupt-at-grace) must also reach a background memory/skill review, not just the foreground

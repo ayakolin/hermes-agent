@@ -154,16 +154,28 @@ _KANBAN_POLL_SECONDS = _LOOP_POLL_SECONDS = 5.0
 def _notif_release_turn(session: dict) -> None:
     with session["history_lock"]:
         session["running"] = False
+        session.pop("_turn_automation", None)
 
 
-def _notif_claim_turn(session: dict) -> bool:
+def _notif_claim_turn(session: dict, *, automation: bool = False) -> bool:
     """Claim the idle session (running=True) under history_lock; False if a turn is live.
     After the user's Stop no automatic turn starts: the cancel latch holds notifications
-    (requeued by the callers) until the next user prompt clears it."""
+    (requeued by the callers) until the next user prompt clears it.
+
+    ``automation``: the turn reports a queue-driven result (a completion, watch notice or kanban event), not
+    the agent's own work, so a user message arriving mid-turn must queue behind it instead of hard-interrupting
+    it. ``session["_turn_automation"]`` is True exactly while that turn holds ``running``: it is set under the
+    same lock as ``running`` (set after the submit returns, a fast turn would already have ended and left it
+    True on an idle session) and cleared wherever ``running`` is released (turn end, refused admission, forced
+    release), so a later turn never inherits it. Read it only together with ``running``."""
     with _session_turn_admission(session) as admitted:
         if not admitted or session.get("running") or session.get("_turn_cancel_requested"):
             return False
         session["running"] = True
+        if automation:
+            session["_turn_automation"] = True
+        else:
+            session.pop("_turn_automation", None)
         return True
 
 
@@ -519,7 +531,7 @@ def _notif_poll_kanban_scoped(sid: str, session: dict) -> None:
                             platform="tui", diagnostic=isinstance(text, DiagnosticText))
     if texts:
         session.setdefault("_kanban_pending", []).extend(texts)
-    if not session.get("_kanban_pending") or not _notif_claim_turn(session):
+    if not session.get("_kanban_pending") or not _notif_claim_turn(session, automation=True):
         return
     with session["history_lock"]:
         pending = session.get("_kanban_pending") or []
@@ -646,7 +658,7 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
     if evt_type == "completion" and completions is not None:
         completions.append((evt, text))
         return True
-    if not _notif_claim_turn(session):
+    if not _notif_claim_turn(session, automation=True):
         queue.put(evt)
         if deferred is not None:
             return False
@@ -662,7 +674,7 @@ def _notif_dispatch_completions(sid, session, notifications, registry, deferred)
 
     if not notifications:
         return
-    if not _notif_claim_turn(session):
+    if not _notif_claim_turn(session, automation=True):
         for event, _text in notifications:
             (deferred.append if deferred is not None else registry.completion_queue.put)(event)
         if deferred is None:
