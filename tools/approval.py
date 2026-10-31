@@ -579,7 +579,16 @@ def _pending_result(spec, session_key: str, *, command: str, description: str,
                     smart_denied: bool) -> dict:
     """Queue an approval nobody can answer right now (no gateway notifier, no CLI panel) for
     ``/approve`` / ``/deny`` review. Command/code gates return the backward-compatible
-    ``pending_approval`` shape (``pattern_keys`` + STOP text); the action gate ``approval_required``."""
+    ``pending_approval`` shape (``pattern_keys`` + STOP text); the action gate ``approval_required``.
+    A dispatcher session's executor never queues: its dispatcher's turn is over, nothing reads ``_pending`` and no
+    card is coming, so it gets a definite ``no_approver`` refusal instead (other delegated children are unchanged)."""
+    from agent.delegation_context import is_executor_child_context
+    if is_executor_child_context():
+        return _denied(
+            f"No one is available to approve this {spec.noun} ({description}), so it was not run. Do NOT retry or "
+            'rephrase it. If you have a `needs_input` tool, call it with kind="approval" and the command in detail, '
+            "and end your run; otherwise finish by saying exactly what was blocked.",
+            pattern_key=pattern_key, description=description, outcome="no_approver", noun=spec.noun)
     pending = {"command": command, "pattern_key": pattern_key}
     if spec.pending_keys:
         pending["pattern_keys"] = pattern_keys

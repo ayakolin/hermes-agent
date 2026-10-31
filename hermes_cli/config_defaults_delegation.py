@@ -65,7 +65,9 @@ DELEGATION_DEFAULTS = {
     "oneshot_max_children": 2,
     # Subagent threads ALWAYS resolve approvals non-interactively (the parent TUI owns stdin;
     # input() from a worker would deadlock). false = auto-deny, true = auto-approve "once"; both
-    # log a warning audit line. true only for trusted batch work.
+    # log a warning audit line. true only for trusted batch work. A dispatcher session's executor with no
+    # approver (a chat platform's card lives for one turn) is refused as "no_approver" and asks via needs_input;
+    # true would make every such executor run dangerous commands unasked, so leave it false there.
     "subagent_auto_approve": False,
     # Subagent background processes (task_id "sa-...") route notify_on_complete / watch_pattern
     # notifications to the PARENT; false suppresses them (the child's result is the

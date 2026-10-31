@@ -17,6 +17,10 @@ _DELEGATED_CHILD_CONTEXT: ContextVar[bool] = ContextVar("hermes_delegated_child_
 # so delegate_task-specific behaviour (subprocess env scrubbing, its error strings) is unchanged.
 _NON_DISPATCHER_OWNED_CONTEXT: ContextVar[bool] = ContextVar("hermes_non_dispatcher_owned_context", default=False)
 
+# A dispatcher session's executor (agent/executor_baseline.py): a delegated child nobody can answer an approval for
+# once the dispatcher's turn ends. Bound around the child's own work by ``child_profile_scope``.
+_EXECUTOR_CHILD_CONTEXT: ContextVar[bool] = ContextVar("hermes_executor_child_context", default=False)
+
 DELEGATED_CHILD_ENV_MARKER = "HERMES_DELEGATED_CHILD_CONTEXT"
 
 KANBAN_ENV_KEYS: tuple[str, ...] = (
@@ -43,6 +47,22 @@ def delegated_child_context(session_id: str | None = None) -> Iterator[None]:
 def is_delegated_child_context() -> bool:
     """Return True while code is running for a delegate_task child."""
     return bool(_DELEGATED_CHILD_CONTEXT.get())
+
+
+@contextmanager
+def executor_child_context() -> Iterator[None]:
+    """Mark the enclosed work as a dispatcher executor's (see ``is_executor_child_context``)."""
+    token = _EXECUTOR_CHILD_CONTEXT.set(True)
+    try:
+        yield
+    finally:
+        _EXECUTOR_CHILD_CONTEXT.reset(token)
+
+
+def is_executor_child_context() -> bool:
+    """True while code runs for a dispatcher session's executor: a delegate_task child built with the executor
+    baseline. Unlike every other delegated child it has no approver once the dispatcher's turn ends."""
+    return bool(_EXECUTOR_CHILD_CONTEXT.get())
 
 
 def enter_non_dispatcher_owned_context() -> Token[bool]:
