@@ -125,6 +125,9 @@ def main():
     os.environ.update(OPENAI_API_KEY='loopback-only', OPENAI_BASE_URL=url)
     Path(os.environ['HERMES_HOME'], 'config.yaml').write_text(
         f'model:\n  default: local\n  provider: custom\n  base_url: {url}\n'
+        # A classic session: the fixture's model asks the clarify tool, which a dispatcher session's
+        # posture toolset does not carry (it asks in plain text and ends the turn instead).
+        'dispatcher:\n  enabled: false\n'
         'agent:\n  clarify_timeout: 25\nauxiliary:\n  title_generation:\n    enabled: false\n')
     try:
         asyncio.run(probe(peer))
