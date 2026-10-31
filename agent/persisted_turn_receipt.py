@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from agent.context_compressor import _DB_PERSISTED_MARKER
+from agent.turn_dispatch_handoff import HANDOFF_ROW_KEY
 
 
 def committed_row_id(message: Any) -> int | None:
@@ -53,6 +54,7 @@ def persisted_turn_receipt(
     last = tail[-1]
     # Equality only verifies the structurally selected final row's body: it never selects an identity.
     if (status == "complete" and last.get("role") == "assistant" and not last.get("tool_calls")
+            and HANDOFF_ROW_KEY not in (last.get("display_metadata") or {})
             and last.get("content") == raw and (final_id := committed_row_id(last)) is not None):
         receipt["final_assistant_row_id"] = final_id
     prefix_unchanged = start == len(history) and all(

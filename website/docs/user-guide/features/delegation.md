@@ -743,6 +743,12 @@ directory, on docker/ssh/modal backends, or if worktree creation fails, the
 setting degrades silently to today's shared-workspace behavior — never an
 error.
 
+## Ending the turn after a dispatch (dispatcher sessions)
+
+In a dispatcher session the model tells the user what it is doing in the text it writes beside the tool calls. When every call of that round was an accepted background dispatch (`delegate_task` spawn, steer or stop, plus `todo` writes), Hermes ends the turn there instead of paying another model call for a status line. The text the model wrote becomes the turn's final reply, stored as a hidden assistant row so the saved transcript never ends on a bare tool result.
+
+The turn keeps the extra model call whenever the model has something to read or say: no text beside the calls, a call that ran synchronously, was refused or errored, `action='list'`, any other tool in the same round, a duplicate or over-limit call that was dropped, a pending interrupt or redirect, or an edited file. Set `delegation.end_turn_on_dispatch: false` to always keep the call. The value is read once per session; start a new session after changing it.
+
 ## Delegation vs execute_code
 
 | Factor | delegate_task | execute_code |
@@ -765,6 +771,7 @@ delegation:
   max_iterations: 250                       # Max turns per child (default: 250)
   # max_concurrent_children: 10             # Parallel children per batch (default: 10)
   # independent_completions: false          # true = each task/group returns as it finishes (default: one message per call)
+  # end_turn_on_dispatch: true              # Dispatcher sessions: end the turn right after accepted dispatches, no status-line model call
   # gateway_mode: auto                      # auto | inline | background (see Messaging chats without interim messages)
   # worktree_isolation: false               # Give each child its own git worktree (see Worktree Isolation above)
   # max_spawn_depth: 1                      # Tree depth (floor 1, no ceiling, default 1 = flat). Raise to 2 to allow orchestrator children to spawn leaves; 3+ for deeper trees.

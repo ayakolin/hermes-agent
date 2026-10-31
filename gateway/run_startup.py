@@ -843,6 +843,9 @@ class GatewayStartupMixin:
             with scope:
                 if diagnostic_turn_muted(prompt.get("display_metadata"), origin.platform):
                     return ""
+        from agent.turn_dispatch_handoff import HANDOFF_ROW_KEY
+        if (last.get("display_metadata") or {}).get(HANDOFF_ROW_KEY) is True:
+            return ""  # a dispatch handoff row whose text the user already saw: nothing is owed
         if is_intentional_silence_response(last["content"]):
             decision = silence_decision or {}
             proven_silent = (active_token is not None and decision.get("token") == active_token

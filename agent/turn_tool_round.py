@@ -12,8 +12,10 @@ from dataclasses import dataclass
 import logging
 from typing import Any, Dict, Optional, Tuple
 
+from agent.dispatcher_session import agent_is_dispatcher
 from agent.message_metadata import append_message
 from agent.message_sanitization import coalesce_tool_call_id, normalize_provider_tool_call_ids
+from agent.turn_dispatch_handoff import DISPATCH_HANDOFF_EXIT, dispatch_handoff_reply
 from agent.turn_preflight import compress_after_tool_results
 from agent.turn_tool_validation import validate_tool_calls
 
@@ -94,9 +96,7 @@ def run_tool_round(
         assistant_message.tool_calls, provider_data=getattr(assistant_message, "provider_data", None))
 
     # Post-call guardrails.
-    assistant_message.tool_calls = agent._deduplicate_tool_calls(
-        agent._cap_delegate_task_calls(assistant_message.tool_calls)
-    )
+    assistant_message.tool_calls, _calls_dropped = _guard_tool_calls(agent, assistant_message.tool_calls)
     # Filtering can turn a mixed batch into an all-provider one; re-check the final batch
     # before it is staged (idempotent for already-normalized ids).
     normalize_provider_tool_call_ids(assistant_message.tool_calls)
@@ -182,19 +182,8 @@ def run_tool_round(
         return _verdict("break")
 
     if agent._tool_guardrail_halt_decision is not None:
-        decision = agent._tool_guardrail_halt_decision
         _turn_exit_reason = "guardrail_halt"
-        final_response = agent._toolguard_controlled_halt_response(decision)
-        agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
-        append_message(messages, {"role": "assistant", "content": final_response})
-        # Emit the halt so it isn't mistaken for a crash; the stream callback is still
-        # alive, so SSE/TUI clients see the explanation. A held turn shows it as the final only.
-        if final_response:
-            agent._safe_print(f"\n{final_response}\n")
-            if agent.stream_delta_callback and not getattr(agent, "_hold_stream", False):
-                with suppress(Exception):
-                    agent.stream_delta_callback(final_response)
-                    agent.stream_delta_callback(None)
+        final_response = _guardrail_halt_final(agent, messages, agent._tool_guardrail_halt_decision)
         return _verdict("break")
 
     # Reset per-turn retry counters so one truncation can't poison the turn.
@@ -225,6 +214,12 @@ def run_tool_round(
     if _ptc.end_turn:
         return _verdict("break")
 
+    # A dispatcher round of accepted dispatches ends here instead of paying a model call to restate
+    # what the user was already told; ``messages`` now holds the hidden boundary row.
+    if (reply := dispatch_handoff_reply(agent, messages, calls_dropped=_calls_dropped)) is not None:
+        final_response, _turn_exit_reason = reply, DISPATCH_HANDOFF_EXIT
+        return _verdict("break")
+
     # Save session log incrementally (so progress is visible even if interrupted)
     agent._session_messages = messages
     # Touch activity so slow post-tool work plus a slow follow-up API call can't exceed
@@ -236,6 +231,33 @@ def run_tool_round(
     # the gateway kills the session before the next activity touch fires (#69559, #69131).
     agent._touch_activity(f"tool results posted, continuing iteration #{api_call_count}")
     return _verdict("continue")
+
+
+def _guard_tool_calls(agent: Any, tool_calls: list) -> tuple[list, bool]:
+    """Cap delegate_task calls, then drop duplicates; returns ``(kept, any_dropped)``.
+
+    A dispatcher session skips the cap: ``delegate_task`` answers a full queue with its own tool error
+    instead of silently deleting calls the model made. ``any_dropped`` keeps the dispatch fast path
+    from ending a turn on a status the model wrote before it knew a call had vanished."""
+    capped = tool_calls if agent_is_dispatcher(agent) else agent._cap_delegate_task_calls(tool_calls)
+    kept = agent._deduplicate_tool_calls(capped)
+    return kept, len(kept) < len(tool_calls)
+
+
+def _guardrail_halt_final(agent: Any, messages: Any, decision: Any) -> str:
+    """Append and show the explanation of a guardrail halt; returns it as the turn's final response."""
+    final_response = agent._toolguard_controlled_halt_response(decision)
+    agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
+    append_message(messages, {"role": "assistant", "content": final_response})
+    # Emit the halt so it isn't mistaken for a crash; the stream callback is still
+    # alive, so SSE/TUI clients see the explanation. A held turn shows it as the final only.
+    if final_response:
+        agent._safe_print(f"\n{final_response}\n")
+        if agent.stream_delta_callback and not getattr(agent, "_hold_stream", False):
+            with suppress(Exception):
+                agent.stream_delta_callback(final_response)
+                agent.stream_delta_callback(None)
+    return final_response
 
 
 def stage_tool_call_message(

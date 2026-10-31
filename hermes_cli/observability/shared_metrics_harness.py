@@ -418,7 +418,8 @@ def finish_turn(agent: Any, turn_exit_reason: Any, final_response: Any, *, inter
         if not pending:
             return
         answered = (
-            reason.startswith("text_response(") and bool(final_response) and not interrupted and not failed
+            (reason.startswith("text_response(") or reason == "dispatch_handoff")
+            and bool(final_response) and not interrupted and not failed
         )
         route = _route(agent)
         for tool in pending:

@@ -63,9 +63,13 @@ Adding one: register in that table (no `if name == ...` chain); `tools/todo_tool
   the truncation is logged, never queued as a chat status warning — `context_file_max_chars` does not raise that cap).
 - **Strict role alternation.** Never two same-role messages in a row; never a synthetic user
   message injected mid-loop. The one exception is `/steer`, delivered as a standalone user row
-  after a tool result (`assistant(tool_calls) → tool → user` is legal on every provider path) —
-  never smeared onto the already-persisted tool row, which append-only persistence would leave
-  divergent from the live request. Cron deliveries live in their own session for this reason.
+  after a tool result within the same loop (`assistant(tool_calls) → tool → user`; the repo does not
+  rely on it across turns) — never smeared onto the already-persisted tool row, which append-only
+  persistence would leave divergent from the live request. A persisted `tool` tail is a defect
+  (`finalize_turn` fails it as `pending_tool_result`): a dispatcher turn of accepted dispatches ends
+  on a hidden assistant boundary row carrying the text the model wrote beside the calls
+  (`agent/turn_dispatch_handoff.py`, exit reason `dispatch_handoff`). Cron deliveries live in their
+  own session for this reason.
 - **Context files** (`agent/prompt_builder.py`) load from the CWD only at startup and are capped
   (`CONTEXT_FILE_MAX_CHARS` / dynamic cap from the context window / `context_file_max_chars`).
   Never load an install-tree `AGENTS.md` as project context (PR #64611); subdirectory hints reject

@@ -15,6 +15,7 @@ from typing import Any, Callable, List, Optional, Tuple
 from agent.codex_responses_adapter import _summarize_user_message_for_log
 from agent.delegation_context import is_dispatcher_owned_worker_context
 from agent.interrupt_control import interrupted_during_api_call_reason
+from agent.turn_dispatch_handoff import DISPATCH_HANDOFF_EXIT
 from agent.turn_failure_copy import exit_reason_failure, stamp_failure
 from agent.context_compressor import _DB_PERSISTED_MARKER
 from agent.message_content import flatten_message_text
@@ -582,6 +583,19 @@ def settle_held_final(agent, result: Any) -> None:
     result.update(final_response=final, response_transformed=transformed, pre_transform_response=None)
 
 
+def _turn_completed(agent, final_response, failed, interrupted, api_call_count, reason) -> bool:
+    """Sibling producers (``turn_recovery``, ``codex_runtime``) return ``completed=False`` for an
+    interrupted turn; the gateway stream gate and the API run status rely on that contract. Running
+    out of iterations only fails a turn that ended without an answer: a text response and a dispatch
+    handoff both land on the last iteration legitimately."""
+    reason = str(reason)
+    return (
+        final_response is not None and not failed and not interrupted
+        and (api_call_count < agent.max_iterations
+             or reason.startswith("text_response(") or reason == DISPATCH_HANDOFF_EXIT)
+    )
+
+
 def public_pre_transform(agent, pre_transform: Optional[Any]) -> Optional[Any]:
     """``pre_transform_response`` for a turn result: a held turn's original never leaves the agent
     (receipts, replay-gap recovery, post-stream suffix painting all see only the rewrite)."""
@@ -649,14 +663,7 @@ def finalize_turn(
     if _exit_failure is not None and _exit_failure.fails_turn:
         failed = True
 
-    # Sibling producers (``turn_recovery``, ``codex_runtime``) return ``completed=False`` for an
-    # interrupted turn; the gateway stream gate and the API run status rely on that contract.
-    completed = (
-        final_response is not None
-        and not failed
-        and not interrupted
-        and (api_call_count < agent.max_iterations or str(_turn_exit_reason).startswith("text_response("))
-    )
+    completed = _turn_completed(agent, final_response, failed, interrupted, api_call_count, _turn_exit_reason)
 
     _rollback_interrupted_preflight_display(agent, interrupted)
 
