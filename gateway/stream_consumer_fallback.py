@@ -9,6 +9,7 @@ import logging
 from typing import Any, Callable, Optional
 
 from gateway.platforms.base import BasePlatformAdapter as _BasePlatformAdapter
+from gateway.response_filters import is_intentional_silence_response as _is_intentional_silence_response
 from gateway.stream_consumer_fences import ensure_closed_code_fences
 
 logger = logging.getLogger("gateway.stream_consumer")
@@ -395,6 +396,14 @@ class StreamFallbackMixin:
             if isinstance(cap, int) and cap > base:
                 return cap
         return base
+
+    def _drop_unshown_marker_at_boundary(self, tick) -> None:
+        """A segment boundary (tool call, or a stop gate sending the turn on) closes a segment that holds a
+        bare silence marker nobody saw: the model did not end the turn on it, so it is not a reply. Without
+        this the boundary's push sends the marker as its own message."""
+        if (tick.got_segment_break and not tick.got_done and self._message_id is None
+                and self._accumulated and _is_intentional_silence_response(self._clean_for_display(self._accumulated))):
+            self._accumulated = self._stream_ledger = ""
 
     # Fresh send carried exactly ``text`` — record it so the gateway can reconcile the flag against the
     # completed response (#71643/#95382 content-vs-flag contract).

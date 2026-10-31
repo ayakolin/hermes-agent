@@ -189,6 +189,48 @@ class TestMarkerAfterStreamedReply:
         assert consumer.final_content_delivered is False
 
 
+class TestMarkerAtATurnBoundaryThatIsNotTheEnd:
+    """A dispatcher turn whose model wrote a bare marker and then a stop gate sent it on (or a tool call
+    followed): the segment holding the marker is closed and a new one starts. Nobody was meant to read
+    the marker, so it must not be posted as its own message."""
+
+    async def _boundary_then_reply(self, boundary):
+        adapter = _numbered_adapter()
+        consumer = GatewayStreamConsumer(
+            adapter, "chat_1", StreamConsumerConfig(edit_interval=0.01, buffer_threshold=1),
+        )
+        consumer.on_delta("NO_REPLY")
+        boundary(consumer)
+        consumer.on_delta(REPLY)
+        consumer.finish(REPLY)
+        await consumer.run()
+        return adapter, consumer
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("boundary", [lambda c: c.on_delta(None), lambda c: c.flush_pending_sync(0.01)],
+                             ids=["segment-break", "flush"])
+    async def test_the_continuation_is_the_only_message_shown(self, boundary):
+        adapter, _consumer = await self._boundary_then_reply(boundary)
+
+        assert _visible(adapter) == [REPLY]
+        assert not any("NO_REPLY" in text for text in _sent_and_edited(adapter))
+
+    @pytest.mark.asyncio
+    async def test_a_marker_that_is_the_turn_end_still_takes_the_silence_path(self):
+        # Control: a bare marker with no boundary before got_done is the turn's answer (silence).
+        adapter = _numbered_adapter()
+        consumer = GatewayStreamConsumer(
+            adapter, "chat_1", StreamConsumerConfig(edit_interval=0.01, buffer_threshold=1))
+        consumer.on_delta("NO_REPLY")
+        consumer.finish("NO_REPLY")
+        await consumer.run()
+
+        assert _visible(adapter) == [] and consumer.final_content_delivered is False
+
+
+REPLY = "On it, checking now."
+
+
 def _draft_adapter():
     from tests.gateway.test_stream_consumer_draft import _make_draft_capable_adapter
 

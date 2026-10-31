@@ -572,6 +572,7 @@ class GatewayStreamConsumer(StreamTransportMixin, StreamFallbackMixin, StreamThi
                 if tick.got_reopen_seed:
                     await self._eager_reopen_seed()
                     continue
+                self._drop_unshown_marker_at_boundary(tick)
 
                 if tick.got_done:
                     self._flush_think_buffer()
