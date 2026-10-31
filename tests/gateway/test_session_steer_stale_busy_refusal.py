@@ -50,6 +50,7 @@ async def test_redirect_for_a_claimed_turn_with_no_agent_is_rejected_not_errored
                                                'execution_generation': generation}, verb='redirect')
 
         assert reply == {'status': 'rejected', 'text': 'second thought', 'delivered': False,
+                         'reason': 'agent_building',
                          'execution_generation': generation, 'authority_epoch': authority.epoch}
         release.set()
         await asyncio.wait_for(authority.sessions['s'].task, 5)

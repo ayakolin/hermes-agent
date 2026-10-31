@@ -8,7 +8,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from .base import JsonValue, Params, Result, WireEnum
-from .common import (OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
+from .common import (BusyDisposition, OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
                      Usage)
 from .connectors_operation import ConnectionRequestPayload
 from .registry import method
@@ -634,6 +634,10 @@ class SessionCorrectionParams(SessionParams):
 class SessionCorrectionResult(Result):
     status: CorrectionStatus
     text: str
+    # Optional (an older backend sends neither; the status alone decides): why a text was queued instead of
+    # delivered, and how a dispatcher session took it.
+    reason: str | None = None
+    disposition: BusyDisposition | None = None
 
 
 method("session.steer", params=SessionCorrectionParams, result=SessionCorrectionResult,

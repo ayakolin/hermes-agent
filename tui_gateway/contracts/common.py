@@ -9,6 +9,15 @@ from pydantic import Field
 from .base import JsonValue, Params, Payload, Result, WireEnum
 
 
+class BusyDisposition(WireEnum):
+    """What became of text typed while a turn ran, on a dispatcher session (``agent.busy_input_local``):
+    a redirect of the in-flight model request, a steer into the running turn, or the next turn's queue."""
+
+    redirected = "redirected"
+    steered = "steered"
+    queued_next_turn = "queued_next_turn"
+
+
 class OpenModel(Result):
     """A result/payload row whose known fields are typed but which the producer may extend
     (the closed set is owned elsewhere: hermes_state rows, provider inventories)."""

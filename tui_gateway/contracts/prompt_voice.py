@@ -10,7 +10,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from .base import JsonValue, Params, Result, WireEnum
-from .common import OpenModel, PendingApproval, SessionParams
+from .common import BusyDisposition, OpenModel, PendingApproval, SessionParams
 from .registry import method
 
 # ── prompt.submit ─────────────────────────────────────────────────────────────────────────────
@@ -68,6 +68,9 @@ class PromptSubmitResult(Result):
 
     status: PromptSubmitStatus | None = None
     voice_stopped: bool | None = None
+    # Busy submits on a dispatcher session: how the text was taken, and why it queued when it did.
+    disposition: BusyDisposition | None = None
+    reason: str | None = None
     # The row written for THIS accepted input, captured before the worker can consume it.
     # Absent on queued/steered/redirected inputs and whenever persistence is not yet proven.
     user_row_id: int | None = None

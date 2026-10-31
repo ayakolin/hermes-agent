@@ -278,6 +278,12 @@ class CanonicalCorrectionAck(Result):
     # Only on a 'rejected' no agent ever saw (none was live): safe to admit as the next prompt. A plain
     # 'rejected' may follow delivery (a Codex steer whose ACK timed out), so clients never re-send it.
     delivered: Literal[False] | None = None
+    # Why the text was not taken ('compression_in_flight', 'agent_building', 'steer_declined', ...), for
+    # the client's notice. Optional: an older owner sends none and the status alone decides.
+    reason: str | None = None
+    # How a dispatcher session took an accepted text, when the status alone cannot say: a redirect that fell
+    # to a steer answers 'queued' with 'steered', so a client does not treat it as the next turn.
+    disposition: Literal['redirected', 'steered'] | None = None
 
 
 class CanonicalCorrectionResult(RootModel):

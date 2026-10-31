@@ -2765,6 +2765,8 @@ export interface PromptSubmitParams {
 export interface PromptSubmitResult {
   status?: PromptSubmitStatus | null
   voice_stopped?: boolean | null
+  disposition?: BusyDisposition | null
+  reason?: string | null
   user_row_id?: number | null
   survivor_user_row_ids?: (number | null)[] | null
   survivor_row_id_map?: Record<string, number | null> | null
@@ -2773,6 +2775,8 @@ export interface PromptSubmitResult {
   forwarded?: boolean | null
 }
 export type PromptSubmitStatus = 'streaming' | 'queued' | 'steered' | 'redirected'
+/** What became of text typed while a turn ran, on a dispatcher session (``agent.busy_input_local``): a redirect of the in-flight model request, a steer into the running turn, or the next turn's queue. */
+export type BusyDisposition = 'redirected' | 'steered' | 'queued_next_turn'
 export interface ClipboardPasteParams {
   session_id: string
   profile?: string | null
@@ -3596,6 +3600,8 @@ export interface SessionCorrectionParams {
 export interface SessionCorrectionResult {
   status: CorrectionStatus
   text: string
+  reason?: string | null
+  disposition?: BusyDisposition | null
 }
 export type CorrectionStatus = 'queued' | 'redirected' | 'rejected'
 export interface SpawnTreeSaveParams {
@@ -5140,6 +5146,8 @@ export interface CanonicalCorrectionAck {
   execution_generation: number
   authority_epoch: number
   delivered?: false | null
+  reason?: string | null
+  disposition?: 'redirected' | 'steered' | null
 }
 /** A bare stop phrase typed while the session's voice chat is on: the chat ended, nothing was admitted (TUI-26). */
 export interface CanonicalVoiceStopped {
@@ -5250,6 +5258,7 @@ export interface CanonicalConfigGetResult {
   mcp_rev?: string | null
   key?: string | null
   scope?: string | null
+  dispatch?: boolean | null
 }
 /** Session controls (``busy`` / ``verbose`` / ``yolo`` / ``show_reasoning`` / ``service_tier``, which need ``session_id``) and the TUI's profile preferences (``gateway/session_tui_config.py``; ``session_id`` optional). ``model`` is recognised only to be refused with ``use_session_mutation_model``: a model pick is the revision-fenced ``session.mutate`` operation, never a config write. */
 export interface CanonicalConfigSetParams {

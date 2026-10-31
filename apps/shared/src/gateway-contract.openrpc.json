@@ -7603,6 +7603,16 @@
         "title": "BrowserProgressPayload",
         "type": "object"
       },
+      "BusyDisposition": {
+        "description": "What became of text typed while a turn ran, on a dispatcher session (``agent.busy_input_local``):\na redirect of the in-flight model request, a steer into the running turn, or the next turn's queue.",
+        "enum": [
+          "redirected",
+          "steered",
+          "queued_next_turn"
+        ],
+        "title": "BusyDisposition",
+        "type": "string"
+      },
       "CanonicalApprovalParams": {
         "additionalProperties": false,
         "properties": {
@@ -8164,6 +8174,18 @@
             ],
             "default": null,
             "title": "Scope"
+          },
+          "dispatch": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Dispatch"
           }
         },
         "title": "CanonicalConfigGetResult",
@@ -8307,6 +8329,34 @@
             ],
             "default": null,
             "title": "Delivered"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "enum": [
+                  "redirected",
+                  "steered"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Disposition"
           }
         },
         "required": [
@@ -32371,6 +32421,29 @@
             "default": null,
             "title": "Voice Stopped"
           },
+          "disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BusyDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
           "user_row_id": {
             "anyOf": [
               {
@@ -36357,6 +36430,29 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BusyDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [

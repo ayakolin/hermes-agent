@@ -1,9 +1,12 @@
 """Session-scoped busy preferences and controls of the existing execution only."""
 import asyncio
+import logging
 from functools import partial
 from pathlib import Path
 
 from hermes_state_runtime import RuntimeStoreError
+
+logger = logging.getLogger(__name__)
 
 
 def handlers(connection):
@@ -52,21 +55,11 @@ async def busy_config(connection, ref, params, *, write=False):
         # UI negotiation is not a settings write and must not rebuild frozen
         # launch policy, toolsets, history, or the retained AIAgent.
         live.busy_input_mode = params['value']
-    value = getattr(live, 'busy_input_mode', None)
-    if value is None:
-        from gateway.session_policy import policy_for_source
-        policy = policy_for_source(authority.runner, live.source)
-        # Main's TUI defaulted to ``queue`` (``ui-tui/src/app/useConfigSync.ts`` TUI_BUSY_DEFAULT): in a
-        # full-screen composer the next prompt is authored while the agent streams, and an unintended
-        # interrupt loses work. Only an explicit ``display.busy_input_mode`` overrides it; every other
-        # surface keeps the framework default ``interrupt``.
-        fallback = 'queue' if policy is not None and getattr(policy, 'source', None) == 'tui' else 'interrupt'
-        display = (policy.config().get('display') or {}) if policy else {}
-        value = (display.get('busy_input_mode') or fallback if policy else
-                 authority.runner._effective_busy_input_mode(live.source))
-        if value not in ('interrupt', 'steer', 'queue'):
-            value = fallback
-    return {'key': 'busy', 'value': value, 'scope': 'session'}
+    from gateway.session_setting_commands import session_busy_state
+    value, dispatch = session_busy_state(authority.runner, live)
+    # ``dispatch`` tells a client the server runs the redirect-first ladder for this session, so it
+    # never routes a refused correction into a hard interrupt.
+    return {'key': 'busy', 'value': value, 'scope': 'session', **({'dispatch': True} if dispatch else {})}
 
 
 _VERBOSE_CYCLE = ('off', 'new', 'all', 'verbose')
@@ -187,31 +180,118 @@ async def correct(connection, ref, params, *, verb):
     authority = connection.authority
     generation = params['execution_generation']
     live = authority.sessions[ref.session_id]
+    # Facts that cost a SQLite read are collected here, before the stream lock: the same lock is taken by
+    # event publication and agent adoption, which a slow state.db must not stall.
+    compressing = await compression_in_flight(authority, ref, live)
+    dispatch = local_dispatch(authority, live)
     with live.event_stream.lock:
         authority.check_approval_generation(ref.session_id, generation)
         # Managed workers have a separate control channel, not a cached owner
         # agent. Refuse explicitly instead of acknowledging undeliverable text.
         if ref.session_id in getattr(authority, '_managed_workers', {}):
+            if dispatch:  # a typed refusal the client queues, not an error it discards (#141644)
+                return correction_ack(params, generation, authority, 'rejected', delivered=False,
+                                      reason='unsupported_control')
             raise RuntimeStoreError('unsupported_control')
-        # Accepted for this exact claim before its turn built an agent: steer_agent latches it for
-        # the agent this generation adopts, never a later one.
-        agent, latched = authority.steer_agent(ref, generation, params['text'] if verb == 'steer' else None)
-        if latched:
-            return {'status': 'queued', 'text': params['text'], 'execution_generation': generation,
-                    'authority_epoch': authority.epoch}
-        # A claim can outlive the agent that carried it (a reaped turn the client still believes is
-        # running), and a redirect in the build window has no agent to queue behind. Nothing live can
-        # take the text, so answer 'rejected' — the wire contract's "not corrected, queue it as the
+        if dispatch:
+            return dispatch_correction(authority, ref, params, generation, verb, compressing)
+        return plain_correction(authority, ref, params, generation, verb, compressing)
+
+
+def correction_ack(params, generation, authority, status, **extra):
+    return {'status': status, 'text': params['text'], 'execution_generation': generation,
+            'authority_epoch': authority.epoch, **extra}
+
+
+def local_dispatch(authority, live):
+    """Whether this session's frozen policy runs the dispatcher busy ladder (a read of the frozen policy)."""
+    from gateway.session_policy import policy_for_source
+    from gateway.session_setting_commands import dispatch_policy
+    try:
+        return dispatch_policy(policy_for_source(authority.runner, live.source))
+    except RuntimeStoreError:
+        return False  # a cold route's policy is restored by the turn itself; no policy, no dispatcher
+
+
+async def compression_in_flight(authority, ref, live):
+    """A compression is preparing or committing this session's transcript: a correction delivered now aborts
+    it (``explicit_interrupt``, #61042) and the follow-up kills the turn that would answer it. In memory,
+    ``claim_gate`` is held across a manual ``/compress`` summarization; durably, the compression lock row of
+    the physical transcript (the compression tip, which an in-turn compression holds). A failed read is
+    "not compressing": the correction then lands as it did before this check."""
+    if live.claim_gate.locked():
+        return True
+    return await asyncio.to_thread(compression_lock_held, authority, ref)
+
+
+def compression_lock_held(authority, ref):
+    try:
+        holder = authority.db.get_compression_lock_holder(authority.physical_target(ref))
+    except Exception:  # health: allow BLE001 -- an unreadable lock row must not refuse the user's message
+        logger.debug('compression lock read failed for %s', ref.session_id, exc_info=True)
+        return False
+    return isinstance(holder, str) and bool(holder)  # a mock's truthy attribute is not a held lock
+
+
+def plain_correction(authority, ref, params, generation, verb, compressing):
+    """The classic busy verbs: ``steer`` queues the text for the running turn, ``redirect`` cancels the
+    in-flight model request. A refusal is ``rejected`` and, when nothing live saw the text, ``delivered: False``."""
+    if compressing:
+        return correction_ack(params, generation, authority, 'rejected', delivered=False,
+                              reason='compression_in_flight')
+    # Accepted for this exact claim before its turn built an agent: steer_agent latches it for
+    # the agent this generation adopts, never a later one.
+    agent, latched = authority.steer_agent(ref, generation, params['text'] if verb == 'steer' else None)
+    if latched:
+        return correction_ack(params, generation, authority, 'queued')
+    # A claim can outlive the agent that carried it (a reaped turn the client still believes is
+    # running), and a redirect in the build window has no agent to queue behind. Nothing live can
+    # take the text, so answer 'rejected'— the wire contract's "not corrected, queue it as the
         # next prompt" (desktop SessionRedirectResponse, tui_gateway's idle-steer reply). Raising here
         # made clients discard the message (#141644). ``delivered: False`` is the confirmation a
         # client may re-admit on: the live-agent 'rejected' below can follow delivery.
-        if agent is None:
-            return {'status': 'rejected', 'text': params['text'], 'execution_generation': generation,
-                    'authority_epoch': authority.epoch, 'delivered': False}
-        method = getattr(agent, verb, None)
-        if not callable(method):
-            raise RuntimeStoreError('execution_not_ready')
-        accepted = method(params['text'])
-        return {'status': ({'steer': 'queued', 'redirect': 'redirected'}[verb] if accepted else 'rejected'),
-                'text': params['text'], 'execution_generation': generation,
-                'authority_epoch': authority.epoch}
+    if agent is None:
+        return correction_ack(params, generation, authority, 'rejected', delivered=False, reason='agent_building')
+    method = getattr(agent, verb, None)
+    if not callable(method):
+        raise RuntimeStoreError('execution_not_ready')
+    accepted = method(params['text'])
+    return correction_ack(params, generation, authority,
+                          {'steer': 'queued', 'redirect': 'redirected'}[verb] if accepted else 'rejected')
+
+
+def dispatch_correction(authority, ref, params, generation, verb, compressing):
+    """A dispatcher session never waits behind its running turn and never hard-interrupts it: the shared
+    ladder (``agent.busy_input``) tries redirect, then steer, and only then asks the client to queue. A
+    False from ``redirect()`` is ordinary (no model request in flight, a prior redirect not yet drained),
+    so it falls to ``steer()``, which every running turn accepts. Called under the stream lock."""
+    from agent.busy_input import BusyFacts
+    from agent.busy_input_local import (
+        DECLINED, MAYBE, TAKEN, native_steer, plan_for_mode, run_ladder, supports_redirect)
+    text = params['text']
+    agent, _ = authority.steer_agent(ref, generation, None)  # who answers; nothing is latched yet
+    facts = BusyFacts(has_text=True, redirect_supported=agent is not None and supports_redirect(agent),
+                      compressing=compressing, agent_building=agent is None)
+    # The verb the client chose is its mapping of the server-resolved mode (``config.get busy``): a steer
+    # client runs the ladder without the redirect rung, a redirect client the whole of it.
+    plan = plan_for_mode('steer' if verb == 'steer' else 'interrupt', facts)
+
+    def redirect():
+        if agent.redirect(text):
+            return TAKEN
+        return MAYBE if native_steer(agent) else DECLINED
+
+    def steer():
+        return TAKEN if agent.steer(text) else DECLINED
+
+    def latch():
+        return TAKEN if authority.steer_agent(ref, generation, text)[1] else DECLINED
+
+    outcome = run_ladder(plan, {'redirect': redirect, 'steer': steer, 'latch': latch})
+    if outcome.verb == 'redirect':
+        return correction_ack(params, generation, authority, 'redirected', disposition='redirected')
+    if outcome.verb != 'queue':
+        return correction_ack(params, generation, authority, 'queued', disposition='steered')
+    if outcome.maybe_delivered:  # the text may already be in: no delivered flag, so a client never re-sends it
+        return correction_ack(params, generation, authority, 'rejected', reason=outcome.reason)
+    return correction_ack(params, generation, authority, 'rejected', delivered=False, reason=outcome.reason)

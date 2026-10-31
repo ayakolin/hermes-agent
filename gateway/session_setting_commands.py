@@ -24,22 +24,40 @@ def local_policy(runner, source):
     return policy_for_source(runner, source)
 
 
-def session_busy_mode(runner, live):
-    """The busy mode a local session's next input runs under (what ``config.get busy`` reports)."""
-    value = getattr(live, 'busy_input_mode', None)
-    if value in ('interrupt', 'steer', 'queue'):
-        return value
+def dispatch_policy(policy):
+    """True when this local session's frozen policy marks it a dispatcher session and
+    ``dispatcher.busy.policy`` is ``dispatch``: its busy input runs the redirect-first ladder
+    (``agent.busy_input_local``) and never hard-interrupts. Frozen with the policy, like the flag."""
+    if policy is None:
+        return False
+    from agent.busy_input_local import dispatch_policy_applies, frozen_dispatcher
+    return dispatch_policy_applies(policy.config(), frozen_dispatcher(policy))
+
+
+def session_busy_state(runner, live):
+    """``(mode, dispatch)``: the busy mode a local session's next input runs under (what ``config.get busy``
+    reports) and whether the server runs the dispatcher ladder for it. A session ``/busy`` override wins; a
+    dispatch session otherwise runs the full ladder (``interrupt``) whatever ``display.busy_input_mode`` says."""
+    from agent.busy_input_local import resolve_busy_mode
     from gateway.session_policy import policy_for_source
+    override = getattr(live, 'busy_input_mode', None)
     policy = policy_for_source(runner, live.source)
+    dispatch = dispatch_policy(policy)
+    if override in ('interrupt', 'steer', 'queue') or dispatch:
+        return resolve_busy_mode(override, 'interrupt', dispatch=dispatch), dispatch
     # Main's TUI defaulted to ``queue`` (``ui-tui/src/app/useConfigSync.ts`` TUI_BUSY_DEFAULT): in a
     # full-screen composer the next prompt is authored while the agent streams, and an unintended
     # interrupt loses work. Only an explicit ``display.busy_input_mode`` overrides it; every other
     # surface keeps the framework default ``interrupt``.
     fallback = 'queue' if policy is not None and getattr(policy, 'source', None) == 'tui' else 'interrupt'
     if policy is None:
-        return runner._effective_busy_input_mode(live.source)
+        return runner._effective_busy_input_mode(live.source), False
     value = (policy.config().get('display') or {}).get('busy_input_mode') or fallback
-    return value if value in ('interrupt', 'steer', 'queue') else fallback
+    return (value if value in ('interrupt', 'steer', 'queue') else fallback), False
+
+
+def session_busy_mode(runner, live):
+    return session_busy_state(runner, live)[0]
 
 
 def local_live_for_route(runner, session_key):

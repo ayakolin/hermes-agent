@@ -16,6 +16,9 @@ from .registry import canonical_method
 class CanonicalConfigGetResult(ConfigGetResult):
     key: str | None = None
     scope: str | None = None
+    # ``config.get busy`` only: the session runs the dispatcher ladder (redirect, steer, queue; never a hard
+    # interrupt), so a refused correction is queued and never turned into an interrupt.
+    dispatch: bool | None = None
 
 
 class CanonicalConfigSetParams(ProfileParams):
