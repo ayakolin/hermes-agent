@@ -246,13 +246,15 @@ def staged_creation_follows(authority, actor, request_id):
 
 
 def stage_local_session(authority, actor, params, *, trusted_policy=None, trusted_secrets=None, skills_prompt=None,
-                        client_local=False, desktop_local=False):
+                        client_local=False, desktop_local=False, dispatcher_session=True):
     """Everything before the creation commit: the existing session's ref on an exact retry, else the
     receipt ``commit_local_session`` writes (the async RPC commits it off the owner loop).
     ``client_local``: the gateway's own proof that the client is on this host (its connection redeemed a
     ticket minted over the private control socket), never a value the client sends. ``desktop_local``:
     that client is also the Desktop app (``process_identity.local_desktop_client``); a Desktop chat
-    records it so its turns run as work for the local Desktop (``session_policy.local_desktop_turn``)."""
+    records it so its turns run as work for the local Desktop (``session_policy.local_desktop_turn``).
+    ``dispatcher_session``: this is the caller whose new session may become a dispatcher (frozen in its policy by
+    ``build_policy``); the onboarding chat opts out, its scripted card flow is not a hand-off conversation."""
     if actor.profile_id != authority.profile_id:
         raise RuntimeStoreError('profile_mismatch')
     if 'session:create' not in actor.capabilities:
@@ -274,7 +276,7 @@ def stage_local_session(authority, actor, params, *, trusted_policy=None, truste
             params = resolve_launch_route(params, config)
         # A client's session.create is the one caller whose named folder may select the coding posture.
         policy = build_policy(params, config, private_secrets=private_secrets, workspace_posture=True,
-                              client_local=client_local)
+                              client_local=client_local, dispatcher_session=dispatcher_session)
         if params is not sent:  # resolved, even to a model of the alias's own name
             # Owner-stamped provenance (not create fields): a remote client cannot re-resolve the typed
             # `-m` alias against its own home, so resume and an exact retry compare a repeat against the

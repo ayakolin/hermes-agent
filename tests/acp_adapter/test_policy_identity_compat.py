@@ -13,6 +13,7 @@ def test_policy_identity_preserves_pre_editor_credential_binding(tmp_path):
     legacy.pop('config_secret_ref')
     legacy.pop('editor_mcp_json')
     legacy.pop('coding_posture')
+    legacy.pop('dispatcher')
     legacy.pop('client_env_json')
     legacy.pop('client_env_remote')
     legacy.pop('client_env_rules_json')

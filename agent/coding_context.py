@@ -294,6 +294,12 @@ def _posture_toolsets(config: Optional[dict[str, Any]]) -> list[str]:
     return [CODING_TOOLSET, *_enabled_mcp_servers(config)]
 
 
+def coding_pins_posture(config: Optional[dict[str, Any]]) -> bool:
+    """Whether ``agent.coding_context`` is ``focus`` or ``on``: the profile asks for the coding brief and its
+    tools, so a session that would otherwise narrow itself (dispatcher mode) leaves them alone."""
+    return _coding_mode(config) in ("focus", "on")
+
+
 def focus_toolsets(config: Optional[dict[str, Any]]) -> Optional[list[str]]:
     """The coding posture's toolsets when ``agent.coding_context`` is ``focus``, else None, for a
     session whose workspace decision is already made (no cwd probe)."""

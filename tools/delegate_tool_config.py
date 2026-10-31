@@ -149,10 +149,14 @@ def agent_joins_delegation(agent: Any) -> bool:
     """The gateway's inline decision, frozen on *agent* at its first tool build (like ``agent_is_oneshot``) and
     re-frozen from a restored tools[] pin (``tools.delegate_tool.adopt_session_delegation_mode``), so later rebuilds
     outside the build scope keep the session's ``delegate_task`` bytes. Dispatch does not read this: it follows the
-    schema the session carries (``tools.delegate_tool.session_joins_delegation``)."""
+    schema the session carries (``tools.delegate_tool.session_joins_delegation``). A dispatcher session is always
+    the background variant; an explicit ``gateway_mode: inline`` does not apply to it."""
     cached = getattr(agent, "_delegation_inline", None)
     if not isinstance(cached, bool):
-        cached = _GATEWAY_DELEGATION_INLINE.get()
+        # A dispatcher hands work to background executors by definition: whatever ``delegation.gateway_mode``
+        # resolved to (a local or legacy build never enters the gateway scope at all), it never joins.
+        from agent.dispatcher_session import agent_is_dispatcher
+        cached = False if agent_is_dispatcher(agent) else _GATEWAY_DELEGATION_INLINE.get()
         agent._delegation_inline = cached
     return cached
 

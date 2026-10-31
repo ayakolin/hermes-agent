@@ -1022,6 +1022,8 @@ def _load_tools(agent, enabled_toolsets, disabled_toolsets):
     agent._configured_disabled_toolsets, disabled_toolsets = disabled_toolsets, session_disabled_toolsets(
         disabled_toolsets, getattr(agent, "platform", None), oneshot=agent_is_oneshot(agent))  # pin restore reads both
     agent.disabled_toolsets = disabled_toolsets  # so the tool_search bridge and delegate children drop them too
+    from agent.dispatcher_session import freeze_dispatcher_session
+    freeze_dispatcher_session(agent, enabled_toolsets)  # before the first tool build: it picks delegate_task's variant
     agent.tools = agent_tool_surface(agent, model_tools.get_tool_definitions(
         enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets, quiet_mode=agent.quiet_mode) or [])
 
@@ -1115,6 +1117,9 @@ def _init_session_state(agent, session_id, session_db, parent_session_id, reason
         from tools.approval import _YOLO_MODE_FROZEN
         if _YOLO_MODE_FROZEN:
             agent._session_init_model_config["yolo_mode"] = True
+    from agent.dispatcher_session import SESSION_MARKER_KEY, session_marker
+    if (marker := session_marker(agent)) is not None:  # only a dispatcher is marked; classic rows stay as they were
+        agent._session_init_model_config[SESSION_MARKER_KEY] = marker
 
     # In-memory todo list for task planning (one per agent/session)
     from tools.todo_tool import TodoStore

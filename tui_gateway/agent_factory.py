@@ -443,6 +443,39 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
         return None
 
 
+def _dispatcher_selection(platform: str, db, session_id: str) -> tuple[str, ...] | None:
+    """The dispatcher toolsets of this conversation, or None for a classic one (agent/dispatcher_session.py).
+
+    Only the TUI and Desktop surfaces can receive a result as a later turn; a plugin session tagged with
+    another source keeps its classic tools. A pinned selection (``HERMES_TUI_TOOLSETS`` or a saved
+    ``platform_toolsets.cli``) and an onboarding chat (a scripted card flow) are never dispatchers. The first turn reads the live config; every later build of
+    the conversation reads the marker it wrote (``session_dispatcher_toolsets``)."""
+    from agent.dispatcher_session import (
+        dispatcher_applies, dispatcher_toolsets, session_dispatcher_toolsets, toolsets_pinned,
+    )
+    from agent.onboarding_record import load
+
+    def decide():
+        if platform not in ("tui", "desktop") or load(db, session_id) is not None:
+            return None
+        cfg = _load_cfg()
+        pinned = bool(os.environ.get("HERMES_TUI_TOOLSETS", "").strip()) or toolsets_pinned(cfg, "cli")
+        return (dispatcher_toolsets(cfg) if dispatcher_applies(cfg, surface=platform, push_capable=True,
+                                                               explicit_toolsets=pinned) else None)
+
+    return session_dispatcher_toolsets(db, session_id, decide)
+
+
+def _session_enabled_toolsets(platform: str | None, db, session_id: str) -> list[str] | None:
+    """What a session of this conversation builds with: its dispatcher selection plus the client surface's own
+    toolsets, else the classic ``_load_enabled_toolsets``. Every build and read-back of a session that has no
+    agent yet goes through here so the toolsets it reports are the ones it will carry."""
+    session_platform = platform or _resolve_session_platform()
+    if (selected := _dispatcher_selection(session_platform, db, session_id)) is None:
+        return _load_enabled_toolsets(platform)
+    return sorted(_with_session_toolsets(selected, session_platform))
+
+
 def _load_disabled_toolsets() -> list[str] | None:
     """``agent.disabled_toolsets`` from config.yaml, or ``None``.
 
@@ -655,6 +688,7 @@ def _make_agent(
     ignore_rules = is_truthy_value(os.environ.get("HERMES_IGNORE_RULES"))
     with _sessions_lock:
         session = _sessions.get(sid)
+    build_db = session_db if session_db is not None else _get_db()
     agent = AIAgent(
         model=model, max_iterations=_cfg_max_turns(cfg, 500), provider=runtime.get("provider"),
         requested_provider=runtime.get("requested_provider"),
@@ -665,8 +699,8 @@ def _make_agent(
         reasoning_config=(
             reasoning_config_override if reasoning_config_override is not None else _load_reasoning_config(str(model or ""))),
         service_tier=service_tier_override if service_tier_override is not None else _load_service_tier(),
-        enabled_toolsets=onboarding_toolsets(_load_enabled_toolsets(platform),
-                                             session_db if session_db is not None else _get_db(), session_id or key),
+        enabled_toolsets=onboarding_toolsets(_session_enabled_toolsets(platform, build_db, session_id or key),
+                                             build_db, session_id or key),
         disabled_toolsets=_load_disabled_toolsets(),
         # OpenRouter provider_routing prefs (gateway + CLI parity).
         providers_allowed=_pr.get("only"), providers_ignored=_pr.get("ignore"), providers_order=_pr.get("order"),
@@ -676,7 +710,7 @@ def _make_agent(
         # The dashboard login identity reaches memory providers as the runtime user, like a gateway user id.
         # Builds that run before the record exists (branch, eager resume, compute host) pass it explicitly.
         user_id=auth_user_id if auth_user_id is not None else _session_auth_user_id(session),
-        session_db=session_db if session_db is not None else _get_db(), ephemeral_system_prompt=system_prompt or None,
+        session_db=build_db, ephemeral_system_prompt=system_prompt or None,
         checkpoints_enabled=_resolve_checkpoints_enabled(cfg),
         pass_session_id=is_truthy_value(os.environ.get("HERMES_TUI_PASS_SESSION_ID")),
         skip_context_files=ignore_rules, skip_memory=ignore_rules, fallback_model=_load_fallback_model(),

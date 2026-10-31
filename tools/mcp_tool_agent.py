@@ -33,8 +33,14 @@ def _resolve_refresh_toolsets(agent, enabled_override, disabled_override):
     """Explicit reloads pass freshly-resolved toolsets (so a server just ENABLED in config is
     picked up) and the agent's selection is updated to match; automatic paths pass nothing
     and reuse the build-time selection."""
+    from agent.dispatcher_session import agent_is_dispatcher
     enabled = getattr(agent, "enabled_toolsets", None)
     disabled = getattr(agent, "disabled_toolsets", None)
+    if agent_is_dispatcher(agent):
+        # A dispatcher's tool surface was chosen at creation and rides its tools[] pin. Every rebuild path
+        # (Bot Chat refresh, /reload-mcp, live-session refresh) hands in the CLASSIC selection; honoring it
+        # would widen the conversation mid-flight. The operator's disabled_toolsets still applies.
+        enabled_override = None
     if enabled_override is not None or disabled_override is not None:
         enabled = enabled_override if enabled_override is not None else enabled
         if disabled_override is not None:
@@ -198,6 +204,11 @@ def persist_agent_tool_names(agent) -> None:
         db.update_session_tool_names(session_id, pin)
     except Exception:
         logger.debug("tool_names persist skipped", exc_info=True)
+        return
+    # The marker rides every pin write: a row the gateway created before this agent kept its initial
+    # model_config, and a dispatcher without its marker would rebuild as a classic session.
+    from agent.dispatcher_session import persist_session_marker
+    persist_session_marker(agent)
 
 
 def _config_permitted_names(agent) -> set:

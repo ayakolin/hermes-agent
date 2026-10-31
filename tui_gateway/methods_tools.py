@@ -221,12 +221,17 @@ def _session_toolsets(session) -> tuple:
     profile scope, the same read ``_build_agent``/``_refresh_live_sessions`` make and the key
     ``profiles.configure`` pins. A session whose agent is not built yet (``session.create`` with no
     prompt) otherwise read back as "everything enabled" (#117977). ``None`` = all toolsets.
-    No session → the launch profile's config."""
+    No session → the launch profile's config. A session that will build as a dispatcher reads back its
+    dispatcher toolsets (``_session_enabled_toolsets``), not the classic set it would never carry."""
     agent = session.get("agent") if session else None
     if agent is not None:
         return getattr(agent, "enabled_toolsets", None), getattr(agent, "disabled_toolsets", None)
     with _session_profile_runtime_scope(session or {}):
-        return _load_enabled_toolsets(_resolve_agent_platform(_session_source(session))), _load_disabled_toolsets()
+        platform = _resolve_agent_platform(_session_source(session))
+        if not session:
+            return _load_enabled_toolsets(platform), _load_disabled_toolsets()
+        with _session_db(session) as db:
+            return _session_enabled_toolsets(platform, db, session.get("session_key") or ""), _load_disabled_toolsets()
 
 
 def _toolset_rows(params: dict, *, with_tools: bool) -> list[dict]:

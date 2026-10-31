@@ -98,7 +98,8 @@ def _side_agent(authority, policy, live, task_id, **overrides):
         model=model, **{key: runtime.get(key) for key in _RUNTIME_KEYS if key in runtime},
         **_checkpoint_agent_kwargs(config),
         max_iterations=policy.max_turns, quiet_mode=True, verbose_logging=False,
-        enabled_toolsets=list(policy.current_toolsets(config)),
+        # The classic selection: a side agent does the work a dispatcher session hands off (terminal, skill_manage).
+        enabled_toolsets=list(policy.classic_toolsets(config)),
         disabled_toolsets=parse_config_string_list((config.get('agent') or {}).get('disabled_toolsets')) or None,
         reasoning_config=policy.current_reasoning_config(runner, live.route),
         service_tier=policy.current_service_tier(runner, live.route),

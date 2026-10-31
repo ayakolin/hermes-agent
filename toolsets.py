@@ -188,6 +188,17 @@ TOOLSETS = {
         posture=True,
     ),
 
+    # Dispatcher posture (agent/dispatcher_session.py): the foreground agent answers at once and hands long
+    # work to background executors, so it keeps only bounded, interruptible tools. Chosen once at session
+    # creation, never auto-recovered into platform tool config (posture=True), and kept out of
+    # _HERMES_CORE_TOOLS so no platform bundle carries it.
+    "dispatcher": _ts(
+        "Dispatcher posture: delegate_task plus the ledger, memory, reminder and read-only lookup tools "
+        "the foreground agent needs to stay responsive",
+        ["delegate_task", "todo_list", "memory", "cronjob_manage", "read_file", "search_files"],
+        posture=True,
+    ),
+
     # Full Hermes toolsets (CLI + messaging platforms). All share the core tools;
     # there is deliberately no agent-callable send_message tool. hermes-acp is the
     # coding posture minus the interactive clarify UI.

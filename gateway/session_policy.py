@@ -149,6 +149,9 @@ class LocalSessionPolicy:
     # workspace). A following session replays this decision rather than re-probing its folder each turn: it
     # drops the posture when its profile leaves ``focus``, and one created outside it never gains it later.
     coding_posture: bool = False
+    # Whether creation chose dispatcher mode (agent/dispatcher_session.py). Frozen like ``coding_posture``, and
+    # stronger: a dispatcher session's toolsets are never re-resolved from the profile, so its tools[] holds.
+    dispatcher: bool = False
     # The shell-launched client's allowlisted environment (``agent.session_client_env``), bound for this
     # session's turns only; None when the client sent none (Desktop, a session from before the field).
     client_env_json: str | None = None
@@ -252,11 +255,19 @@ class LocalSessionPolicy:
     def current_toolsets(self, config):
         """The next turn's toolsets from its resolved *config*: a following session without an explicit
         toolset pick runs the profile's current selection (main #124211), else the frozen launch set."""
-        if (not self.follows_profile or self.source not in SURFACES or self.editor_mcp_json is not None
-                or 'toolsets' in json.loads(self.request_json)):
+        if (self.dispatcher or not self.follows_profile or self.source not in SURFACES
+                or self.editor_mcp_json is not None or 'toolsets' in json.loads(self.request_json)):
             return self.toolsets
         # The workspace decision is the creation-time one: a project file the agent writes mid-session must
         # not switch this conversation's toolsets (prompt cache). Only a profile change (``focus`` off) does.
+        return tuple(sorted(_resolve_toolsets({}, config, self.source, self.safe_mode, self.coding_posture)))
+
+    def classic_toolsets(self, config):
+        """The toolsets a session of this surface gets WITHOUT dispatcher mode: what a side agent (``/bg``,
+        ``/refine``, a cold review) runs. It does the work a dispatcher hands off, so it keeps the terminal
+        and the skill tools the dispatcher's own narrow surface lacks."""
+        if not self.dispatcher:
+            return self.current_toolsets(config)
         return tuple(sorted(_resolve_toolsets({}, config, self.source, self.safe_mode, self.coding_posture)))
 
     def current_reasoning_config(self, runner, session_key=None):
@@ -413,8 +424,9 @@ def present_sections(config):
 
 
 def build_policy(params, config, *, private_secrets=None, profile_terminal=True, workspace_posture=False,
-                 client_local=False):
+                 client_local=False, dispatcher_session=False):
     from agent.runtime_cwd import resolve_agent_cwd
+    from gateway.session_policy_dispatcher import local_dispatcher
     from tools.terminal_scope import build_profile_terminal_scope, default_terminal_scope
     from hermes_constants import get_hermes_home
 
@@ -460,7 +472,12 @@ def build_policy(params, config, *, private_secrets=None, profile_terminal=True,
     # pick wins anyway; skipping it here also spares the probe.
     named = workspace_posture and source != 'tool' and 'cwd' in params and 'toolsets' not in params
     coding_posture = named and _in_coding_workspace(config, source, cwd)
-    enabled = _resolve_toolsets(params, config, source, safe_mode, coding_posture, bypass=ignore_user_config)
+    # Dispatcher mode is likewise opt-in per caller (a new local session), decided here once and frozen in the
+    # policy. It and the coding posture exclude each other: the posture needs ``agent.coding_context: focus``,
+    # which keeps dispatcher mode off.
+    dispatcher = dispatcher_session and local_dispatcher(params, config, source, safe_mode=safe_mode)
+    enabled = _resolve_toolsets(params, config, source, safe_mode, coding_posture, bypass=ignore_user_config,
+                                dispatcher=dispatcher)
     terminal = build_profile_terminal_scope(get_hermes_home()) if profile_terminal else default_terminal_scope()
     # The client's launch folder is a path on THIS host: a remote or container backend keeps its own
     # configured cwd unless the user picked this folder for the session.
@@ -485,7 +502,7 @@ def build_policy(params, config, *, private_secrets=None, profile_terminal=True,
     return LocalSessionPolicy(source, SURFACES[source], cwd, model, tuple(sorted(enabled)),
                               json.dumps(config), json.dumps(request, sort_keys=True), json.dumps(terminal),
                               safe_mode=safe_mode, ignore_user_config=ignore_user_config,
-                              coding_posture=coding_posture, client_env_json=client_env,
+                              coding_posture=coding_posture, dispatcher=dispatcher, client_env_json=client_env,
                               client_env_remote=client_env is not None and not client_local,
                               client_env_rules_json=rules)
 
@@ -645,11 +662,27 @@ def _apply_launch_overrides(params, config):
         pin_reasoning_effort(config, params['reasoning'])
 
 
-def _resolve_toolsets(params, config, source, safe_mode, coding_posture=False, bypass=False):
+def _default_toolsets(config, source, coding_posture, dispatcher):
+    """The toolsets a session gets when the client picked none: a *dispatcher* session's posture toolset (plus the
+    operator's extras), else the coding posture's ``focus_toolsets`` while the profile stays on ``focus``, else the
+    profile default. Both are decided by the gateway at creation, never by the client."""
+    if dispatcher:
+        from agent.dispatcher_session import dispatcher_toolsets
+        return set(dispatcher_toolsets(config))
+    from hermes_cli.tools_config import _get_platform_tools
+    if coding_posture:
+        from agent.coding_context import focus_toolsets
+        posture = focus_toolsets(config)
+        if posture is not None:
+            return set(posture)
+    return _get_platform_tools(config, 'acp' if source == 'acp' else 'cli')
+
+
+def _resolve_toolsets(params, config, source, safe_mode, coding_posture=False, bypass=False, dispatcher=False):
     """Validate explicit toolsets and return the session's enabled toolset set. Without a pick, a
     *coding_posture* session runs ``focus_toolsets`` instead of the profile default while the profile
-    stays on ``focus``; the gateway decides it, never the client."""
-    from hermes_cli.tools_config import _get_platform_tools, enabled_mcp_server_names
+    stays on ``focus``, and a *dispatcher* session runs the dispatcher posture (``_default_toolsets``)."""
+    from hermes_cli.tools_config import enabled_mcp_server_names
     from hermes_cli.toolset_validation import saved_toolset_resolver
     from toolsets import validate_toolset
     explicit = params.get('toolsets')
@@ -673,11 +706,7 @@ def _resolve_toolsets(params, config, source, safe_mode, coding_posture=False, b
         if 'desktop_ui' in explicit and source != 'gui':
             _refuse('toolsets', f'desktop_ui is only available on the Desktop, not on {source}')
         config.setdefault('platform_toolsets', {})['acp' if source == 'acp' else 'cli'] = explicit
-    posture = None
-    if explicit is None and coding_posture:
-        from agent.coding_context import focus_toolsets
-        posture = focus_toolsets(config)
-    enabled = set(posture) if posture is not None else _get_platform_tools(config, 'acp' if source == 'acp' else 'cli')
+    enabled = _default_toolsets(config, source, explicit is None and coding_posture, dispatcher)
     if explicit is not None:
         from toolsets import resolve_toolset
         requested = {t for name in explicit for t in resolve_toolset(name)}
@@ -991,7 +1020,7 @@ def restore_policy(data):
                 or any(not isinstance(name, str) for name in policy.toolsets)
                 or type(policy.safe_mode) is not bool or type(policy.ignore_user_config) is not bool
                 or not isinstance(policy.skills_prompt, (str, type(None)))
-                or type(policy.coding_posture) is not bool
+                or type(policy.coding_posture) is not bool or type(policy.dispatcher) is not bool
                 or not _valid_client_env(policy.client_env_json) or type(policy.client_env_remote) is not bool
                 or not _valid_client_env(policy.client_env_rules_json, list)
                 or policy.edit_approval_policy not in EDIT_APPROVAL_POLICIES
@@ -1019,11 +1048,13 @@ def _valid_client_env(value, kind: type = str):
         kind is str or all(isinstance(item, str) for item in v)) for k, v in env.items())
 
 
-def policy_turn_toolsets(authority, policy, config, session_id):
+def policy_turn_toolsets(authority, policy, config, session_id, *, classic=False):
     """A local turn's toolsets: the policy's current set, plus ``onboarding`` for an onboarding chat
-    (``agent.onboarding_session.onboarding_chat_toolsets``)."""
+    (``agent.onboarding_session.onboarding_chat_toolsets``). ``classic``: the set the surface gets without
+    dispatcher mode, for a side agent that does the work a dispatcher session hands off (a cold review)."""
     from agent.onboarding_session import onboarding_chat_toolsets
-    return onboarding_chat_toolsets(list(policy.current_toolsets(config)), getattr(authority, 'db', None), session_id)
+    selected = policy.classic_toolsets(config) if classic else policy.current_toolsets(config)
+    return onboarding_chat_toolsets(list(selected), getattr(authority, 'db', None), session_id)
 
 
 def local_desktop_turn(runner, source, scope):

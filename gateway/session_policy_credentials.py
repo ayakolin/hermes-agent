@@ -66,6 +66,8 @@ def policy_identity(policy, unhashed=()):
         data.pop('editor_mcp_json', None)
     if not data.get('coding_posture'):
         data.pop('coding_posture', None)
+    if not data.get('dispatcher'):
+        data.pop('dispatcher', None)
     for name in ('client_env_json', 'client_env_rules_json'):
         if data.get(name) is None:
             data.pop(name, None)

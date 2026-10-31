@@ -1278,6 +1278,9 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         if room is not None:
             max_iterations = room.max_iterations
             ctx.enabled_toolsets = list(room.enabled_toolsets)
+        elif policy is None:  # a chat platform: its conversation may be a dispatcher (gateway/run_turn_dispatcher.py)
+            from gateway.run_turn_dispatcher import dispatcher_turn_toolsets
+            ctx.enabled_toolsets = dispatcher_turn_toolsets(runner, ctx, platform_key, ctx.enabled_toolsets)
         try:
             model, runtime_kwargs = runner._resolve_session_agent_runtime(
                 source=ctx.source, session_key=ctx.session_key, user_config=ctx.user_config,

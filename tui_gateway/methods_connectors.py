@@ -116,7 +116,7 @@ def _session_connector_gate(rid, session, action):
     from tools.connectors import connectors_available
 
     agent = session.get("agent")
-    enabled = agent.enabled_toolsets if agent is not None else _load_enabled_toolsets(_resolve_agent_platform(_session_source(session)))
+    enabled = agent.enabled_toolsets if agent is not None else _session_toolsets(session)[0]
     disabled = agent.disabled_toolsets if agent is not None else None
     if "manage_connections" not in model_tools._select_tool_names(enabled, disabled, quiet_mode=True) or not connectors_available():
         if action == "status":

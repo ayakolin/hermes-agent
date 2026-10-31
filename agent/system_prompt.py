@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from agent.delegation_context import owned_kanban_task
+from agent.dispatcher_session import agent_is_dispatcher
 from agent.prompt_builder import (
-    DEFAULT_AGENT_IDENTITY, EXECUTION_GUIDANCE_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
+    DEFAULT_AGENT_IDENTITY, DISPATCHER_GUIDANCE, EXECUTION_GUIDANCE_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     HERMES_AGENT_HELP_GUIDANCE, HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS, KANBAN_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE, PLATFORM_HINTS, SESSION_SEARCH_GUIDANCE,
     SKILLS_GUIDANCE, STEER_CHANNEL_NOTE, TASK_COMPLETION_GUIDANCE, TELEGRAM_RICH_MESSAGES_HINT,
@@ -560,12 +561,13 @@ def _guidance_parts(agent: Any) -> list[str]:
     """Universal + tool-aware + model-gated guidance blocks, each gated by its config.yaml key."""
     parts: list[str] = []
     if agent.valid_tool_names:
-        parts += [
-            text for flag, text in (
-                ("_task_completion_guidance", TASK_COMPLETION_GUIDANCE),
-                ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE),
-            ) if getattr(agent, flag, True)
-        ]
+        # A dispatcher hands work off instead of finishing it, so its block replaces "Finishing the job".
+        if agent_is_dispatcher(agent):
+            parts.append(DISPATCHER_GUIDANCE)
+        elif getattr(agent, "_task_completion_guidance", True):
+            parts.append(TASK_COMPLETION_GUIDANCE)
+        if getattr(agent, "_parallel_tool_call_guidance", True):
+            parts.append(PARALLEL_TOOL_CALL_GUIDANCE)
     parts.append(_tool_guidance_block(agent))  # None/empty entries are dropped by _join_tier
     if not agent.valid_tool_names:
         return parts
@@ -678,7 +680,8 @@ def _coding_parts(agent: Any) -> tuple[list[str], list[str], list[str]]:
     """
     try:
         from agent.coding_context import coding_system_prompt_parts
-        if not agent.valid_tool_names:
+        # The brief points at patch/write_file, which a dispatcher does not have.
+        if not agent.valid_tool_names or agent_is_dispatcher(agent):
             return [], [], []
         cwd = resolve_context_cwd()
         cwd_key = _workspace_pin_key()

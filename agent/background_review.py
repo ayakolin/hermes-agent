@@ -988,6 +988,11 @@ def build_cache_parity_fork(
     if not _routed and write_origin == "background_review":
         _warn_ignored_reasoning_effort(agent, task_cfg)
     review_agent = AIAgent(**_fork_init_kwargs(agent, _rt, _routed, max_iterations, task_cfg))
+    # The fork inherits the parent's toolsets, so construction would derive "dispatcher" for it. A same-model
+    # fork replays the parent's cached prompt and tools[] and keeps the parent's flag so a rebuild stays
+    # byte-identical; a routed fork builds its OWN prompt for a review job and must not be told to delegate.
+    from agent.dispatcher_session import agent_is_dispatcher
+    review_agent._dispatcher_session = agent_is_dispatcher(agent) and not _routed
     review_agent._memory_write_origin = review_agent._memory_write_context = write_origin
     # Fork-turn log tag: the fork shares the parent's session_id (and model on the
     # same-model path), so its turn-start/turn-exit log lines are otherwise

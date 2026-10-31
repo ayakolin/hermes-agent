@@ -59,8 +59,8 @@ def cold_review_parent(runner, source, session_key, session_id):
     user_config = policy.config(authority, secrets=False) if policy else _load_gateway_config()
     platform_key = policy.platform if policy else _platform_config_key(source.platform)
     enabled, disabled = runner._resolve_turn_toolsets(user_config, source, platform_key)
-    if policy:
-        enabled = policy_turn_toolsets(authority, policy, user_config, source.chat_id)
+    if policy:  # the reviewer writes skills and memory, which a dispatcher session's own tools cannot
+        enabled = policy_turn_toolsets(authority, policy, user_config, source.chat_id, classic=True)
     # Each input below is the one the turn runner reads for this session (``run_turn_runner``).
     pr = session_routing(authority, policy) if policy else runner._provider_routing
     prefill = session_prefill(authority, policy, source.chat_id) if policy else runner._prefill_messages

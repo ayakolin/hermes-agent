@@ -63,8 +63,9 @@ def _settings(policy, config, live, picked):
     toolsets = policy.toolsets
     if 'toolsets' not in request and policy.editor_mcp_json is None:
         keys.append('disabled_toolsets')
-        _follow(config, live, 'platform_toolsets')
-        toolsets = tuple(sorted(_resolve_toolsets({}, live, policy.source, policy.safe_mode, policy.coding_posture)))
+        _follow(config, live, 'platform_toolsets')  # a dispatcher's side agents run the classic selection from it
+        if not policy.dispatcher:  # a dispatcher's own toolsets were chosen at creation and never follow the profile
+            toolsets = tuple(sorted(_resolve_toolsets({}, live, policy.source, policy.safe_mode, policy.coding_posture)))
     for key in keys:
         _follow(agent, live_agent, key)
     if agent or 'agent' in config:
@@ -125,6 +126,8 @@ def _mcp_servers(policy, config, live, toolsets, secrets, replaced):
     else:
         config.pop('mcp_servers', None)
     replaced.add('mcp_servers')
+    if policy.dispatcher:  # the definitions above are current; the dispatcher's own toolsets stay as created
+        return toolsets
     servers = selected & enabled & picked if picked else selected & enabled
     return tuple(sorted((set(toolsets) - set(sections[0]) - set(sections[1])) | servers))
 
