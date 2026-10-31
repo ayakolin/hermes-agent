@@ -8,6 +8,7 @@ import re
 import threading
 from typing import Any, Dict, List
 
+from agent.dispatcher_ack import flush_preamble, take_early_interim
 from agent.memory_context import sanitize_context
 from agent.message_content import flatten_message_text
 from agent.history_commentary import COMMENTARY_WITHHELD, commentary_items, visible_commentary
@@ -89,6 +90,7 @@ class StreamDeliveryMixin:
         self._native_reasoning_streamed = False
         # Next stream re-reads plugins.stream_reasoning_deltas (config edits land per request).
         self._stream_reasoning_hooks_enabled = None
+        self._ack_preamble_flushed = False  # dispatcher: one early preamble flush per model response
 
         def deliver(tail: str) -> None:
             # Recorded only once shown (as ``_fire_stream_delta``): a held tail must not become an
@@ -243,11 +245,15 @@ class StreamDeliveryMixin:
                 pending[key] = part
         undelivered_parts = list(pending.values())
         visible = "\n\n".join(undelivered_parts).strip() if commentary_parts else self._interim_assistant_visible_text(assistant_msg)
-        if not visible or visible == "(empty)" or self._interim_text_was_delivered(visible):
+        if not visible or visible == "(empty)":
+            return
+        early = take_early_interim(self, visible)  # a dispatcher already sent this when the tool call began
+        if self._interim_text_was_delivered(visible) and not early:
             return
         already_streamed = self._interim_content_fully_streamed(visible)
         self._enqueue_stream_hook("on_interim_message", text=visible, already_streamed=already_streamed)
-        self._deliver_interim(visible, already_streamed=already_streamed, record=undelivered_parts or [visible])
+        if not early:
+            self._deliver_interim(visible, already_streamed=already_streamed, record=undelivered_parts or [visible])
 
     def _ensure_stream_writer_state(self) -> None:
         """Lazily create the single-writer guard fields (#65991).
@@ -395,9 +401,11 @@ class StreamDeliveryMixin:
         if enabled:
             self._enqueue_stream_hook("on_stream_delta", label="reasoning on_stream_delta", delta=text, kind="reasoning")
 
-    def _fire_tool_gen_started(self, tool_name: str) -> None:
-        """Notify the display layer that the model is generating tool call arguments (spinner for large payloads)."""
+    def _fire_tool_gen_started(self, tool_name: str, preamble: str = "") -> None:
+        """Notify the display layer that the model is generating tool call arguments (spinner for large payloads).
+        ``preamble`` is the text written so far this response: a dispatcher session shows it now."""
         self._call_quietly(self.tool_gen_callback, tool_name)
+        self._call_quietly(flush_preamble, self, preamble)
 
     def _has_stream_consumers(self) -> bool:
         """Return True if any streaming consumer is registered."""

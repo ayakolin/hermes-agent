@@ -139,3 +139,80 @@ def test_a_note_other_notices_ride_with_still_reaches_the_tool_row():
     assert "plugin blender is live" in content and content.count("[System note:") == 2
     assert json.dumps(requests[1]).count("plugin blender is live") == 1
 
+
+class TestEarlyPreambleFlush:
+    """``dispatcher.ack.early_interim``: on a messaging platform the text written before the first tool
+    call is delivered when that call starts, instead of after the whole tool-call response (arguments
+    included) has been generated. The normal emit after persistence neither sends it twice nor skips the
+    ``on_interim_message`` plugin hook."""
+
+    def _fire(self, agent, text):
+        from agent.dispatcher_ack import flush_preamble
+
+        agent.tool_gen_callback = lambda _name: None
+        agent._fire_tool_gen_started("web_search", text)
+
+    def test_the_preamble_is_delivered_when_the_tool_call_starts(self):
+        agent = _agent()
+        agent._ack_obligation = True
+        agent.platform = "telegram"
+        shown = []
+        agent.interim_assistant_callback = lambda text, already_streamed=False: shown.append((text, already_streamed))
+
+        self._fire(agent, "On it, checking now.")
+
+        assert shown == [("On it, checking now.", False)]
+        assert agent._interim_text_was_delivered("On it, checking now.")
+
+    @pytest.mark.parametrize(("platform", "armed", "stored", "config"), [
+        ("cli", True, None, None),  # a local viewer rebuilds from the stored rows
+        ("desktop", True, None, None),
+        ("telegram", False, None, None),  # not a turn that owes a reply
+        ("telegram", True, None, {"dispatcher": {"ack": {"early_interim": False}}}),
+    ], ids=["local-cli", "desktop", "not-armed", "turned-off"])
+    def test_nothing_is_flushed_where_it_does_not_apply(self, platform, armed, stored, config):
+        from agent.dispatcher_ack import arm_ack_obligation
+
+        agent = _agent()
+        agent.platform = platform
+        agent._dispatcher_session = True
+        agent._ack_obligation = armed
+        if config:
+            arm_ack_obligation(agent, config=config)
+        agent._ack_obligation = armed
+        shown = []
+        agent.interim_assistant_callback = lambda text, already_streamed=False: shown.append(text)
+
+        self._fire(agent, "On it, checking now.")
+
+        assert shown == [] and not agent._interim_text_was_delivered("On it, checking now.")
+
+    def test_a_streamed_preamble_or_a_marker_is_not_flushed_again(self):
+        agent = _agent()
+        agent._ack_obligation = True
+        agent.platform = "telegram"
+        shown = []
+        agent.interim_assistant_callback = lambda text, already_streamed=False: shown.append(text)
+        agent._current_streamed_assistant_text = "On it, checking now."
+
+        self._fire(agent, "On it, checking now.")
+        agent._current_streamed_assistant_text = ""
+        agent._ack_preamble_flushed = False
+        self._fire(agent, "NO_REPLY")
+
+        assert shown == []
+
+    def test_the_normal_emit_after_persistence_skips_only_the_second_send(self):
+        agent = _agent()
+        agent._ack_obligation = True
+        agent.platform = "telegram"
+        shown, hooks = [], []
+        agent.interim_assistant_callback = lambda text, already_streamed=False: shown.append(text)
+        self._fire(agent, "On it, checking now.")
+
+        with patch("agent.plugin_stream_hooks.enqueue_plugin_stream_hook",
+                   side_effect=lambda event, **fields: hooks.append((event, fields["text"]))):
+            agent._emit_interim_assistant_message({"role": "assistant", "content": "On it, checking now."})
+
+        assert shown == ["On it, checking now."]  # once, not twice
+        assert hooks == [("on_interim_message", "On it, checking now.")]  # the plugin hook still runs once

@@ -2834,9 +2834,9 @@ class _StreamingCall(StreamingWaitMonitor):
         self._fire_first_delta()
         self.agent._fire_reasoning_delta(text)
 
-    def _emit_tool_started(self, name: str) -> None:
+    def _emit_tool_started(self, name: str, preamble: str = "") -> None:
         self._fire_first_delta()
-        self.agent._fire_tool_gen_started(name)
+        self.agent._fire_tool_gen_started(name, preamble)
 
     def _route_suppressed_text(self, text: str) -> None:
         """Tool-call turns suppress content streaming (no chatty preamble), but
@@ -3193,7 +3193,7 @@ class _StreamingCall(StreamingWaitMonitor):
                 for tc_delta in delta_tool_calls:
                     name = tool_calls.feed(tc_delta)
                     if name is not None:
-                        self._emit_tool_started(name)
+                        self._emit_tool_started(name, "".join(content_parts))
                         # Lets the stub-builder warn if streaming dies before the args
                         # complete instead of silently discarding the action.
                         self.result["partial_tool_names"].append(name)
@@ -3434,7 +3434,7 @@ class _StreamingCall(StreamingWaitMonitor):
                     if block and getattr(block, "type", None) == "tool_use":
                         has_tool_use = True
                         if getattr(block, "name", None):
-                            self._emit_tool_started(block.name)
+                            self._emit_tool_started(block.name, accumulator.text())
                             # Same as the chat_completions wire: a stream that dies inside the
                             # tool args is retried (no tool has run yet) instead of stubbed.
                             self.result["partial_tool_names"].append(block.name)

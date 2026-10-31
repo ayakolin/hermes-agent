@@ -627,6 +627,11 @@ class AnthropicStreamAccumulator:
         if isinstance(index, int) and isinstance(block, dict):
             self._blocks[index] = dict(block)
 
+    def text(self) -> str:
+        """The text blocks received so far, in order (a tool_use block always follows the text before it)."""
+        return "".join(str(block.get("text") or "") for _, block in sorted(self._blocks.items())
+                       if block.get("type") == "text")
+
     def _on_content_block_delta(self, payload: dict[str, Any]) -> None:
         index, delta = payload.get("index"), payload.get("delta")
         if not isinstance(index, int) or not isinstance(delta, dict):
