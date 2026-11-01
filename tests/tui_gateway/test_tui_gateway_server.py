@@ -12895,7 +12895,8 @@ def test_session_redirect_build_window_scrubs_stale_p_when_queuing_q():
     finally:
         server._sessions.pop("sid", None)
 
-    assert resp["result"] == {"status": "queued", "text": "correction Q"}
+    assert resp["result"] == {"status": "queued", "text": "correction Q", "reason": "agent_building",
+                                   "disposition": "queued_next_turn"}
     assert session["queued_prompt"]["text"] == "correction Q"
     assert not session.get("queued_prompts")
 
@@ -13019,7 +13020,8 @@ def test_session_redirect_queues_during_agent_build_window(monkeypatch):
     finally:
         server._sessions.pop("sid", None)
 
-    assert resp["result"] == {"status": "queued", "text": "wait, use SQLite"}
+    assert resp["result"] == {"status": "queued", "text": "wait, use SQLite", "reason": "agent_building",
+                                   "disposition": "queued_next_turn"}
     assert session["queued_prompt"]["text"] == "wait, use SQLite"
 
 
