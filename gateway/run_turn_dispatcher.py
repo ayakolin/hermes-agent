@@ -8,6 +8,8 @@ the same value on every turn of the conversation.
 """
 from __future__ import annotations
 
+import logging
+
 from agent.dispatcher_session import (
     dispatcher_applies, dispatcher_toolsets, session_dispatcher_toolsets, toolsets_pinned,
 )
@@ -15,6 +17,7 @@ from gateway.config import Platform
 from gateway.wake import adapter_supports_push
 
 _NO_AGENT = object()
+logger = logging.getLogger(__name__)
 
 
 def _cached_selection(runner, ctx):
@@ -66,10 +69,16 @@ def dispatcher_turn_toolsets(runner, ctx, platform_key, current):
     if ctx.source.platform == Platform.LOCAL:
         return current
     cached = _cached_selection(runner, ctx)
+    frozen_reason = "cached agent" if cached is not _NO_AGENT else "session marker or first turn"
     if cached is not _NO_AGENT:
         selected = cached
     else:
         db = runner._session_db
         selected = session_dispatcher_toolsets(
             getattr(db, "_db", db), ctx.session_id, lambda: _decide(runner, ctx, platform_key))
-    return current if selected is None else list(selected)
+    selected = current if selected is None else list(selected)
+    logger.info(
+        "dispatcher mode: %s session (source=%s, toolsets=%s, decided by %s)",
+        "dispatcher" if selected is not current else "classic", platform_key, list(selected), frozen_reason,
+    )
+    return selected
