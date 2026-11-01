@@ -73,6 +73,18 @@ def test_a_saved_platform_selection_pins_the_surface():
     assert toolsets_pinned({}, "cli") is False
 
 
+def test_the_default_composite_hermes_setup_writes_is_not_a_pin():
+    """``hermes setup`` writes ``platform_toolsets.<p>: [hermes-<p>]`` on every install. Counting that as a
+    deliberate narrowing made dispatcher mode silently unreachable on the whole machine (found on a live
+    deploy: telegram stayed classic with the full tool surface)."""
+    assert toolsets_pinned({"platform_toolsets": {"telegram": ["hermes-telegram"]}}, "telegram") is False
+    assert toolsets_pinned({"platform_toolsets": {"cli": ["hermes-cli"]}}, "cli") is False
+    assert toolsets_pinned({"platform_toolsets": {"discord": ["hermes-discord"]}}, "discord") is False
+    # Anything the operator actually changed still pins.
+    assert toolsets_pinned({"platform_toolsets": {"telegram": ["hermes-telegram", "web"]}}, "telegram") is True
+    assert toolsets_pinned({"platform_toolsets": {"telegram": ["terminal"]}}, "telegram") is True
+
+
 @pytest.mark.parametrize("agent, expected", [
     (SimpleNamespace(enabled_toolsets=[DISPATCHER_TOOLSET], platform="cli", side_agent=False), True),
     (SimpleNamespace(enabled_toolsets=[DISPATCHER_TOOLSET, "project"], platform="tui", side_agent=False), True),

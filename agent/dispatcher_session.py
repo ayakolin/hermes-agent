@@ -111,11 +111,31 @@ def dispatcher_toolsets(config: Mapping[str, Any] | None) -> tuple[str, ...]:
 
 
 def toolsets_pinned(config: Mapping[str, Any] | None, platform: str) -> bool:
-    """Whether the operator saved a tool selection for *platform* (``platform_toolsets.<platform>``, what
-    ``hermes tools``, ``profiles.configure`` and the Blank Slate setup write). Only a deliberate act writes it, so
-    a default install is never pinned; a pinned surface keeps that selection and is not a dispatcher."""
-    from hermes_cli.tools_config import _platform_toolsets_explicitly_saved
-    return _platform_toolsets_explicitly_saved(dict(config or {}), platform)
+    """Whether the operator NARROWED this platform's tool selection, so the surface keeps it and is not a
+    dispatcher.
+
+    ``platform_toolsets.<platform>`` alone is not evidence: ``hermes setup`` writes the platform's own default
+    composite (``telegram: [hermes-telegram]``) on every install, and a default install must still become a
+    dispatcher. Only a list that differs from that default is a deliberate choice. An explicit empty list is
+    the operator asking for no tools at all — also deliberate."""
+    from hermes_cli.tools_config import (
+        _coerce_platform_toolsets_value, _platform_default_toolset, _platform_toolsets_explicitly_saved,
+    )
+    from toolsets import BUILTIN_TOOLSET_NAMES
+    config = dict(config or {})
+    if not _platform_toolsets_explicitly_saved(config, platform):
+        return False
+    saved = _coerce_platform_toolsets_value((config.get("platform_toolsets") or {}).get(platform), platform)
+    if not saved:
+        return True
+    if [str(name) for name in saved] == [_platform_default_toolset(platform)]:
+        return False
+    # A surface whose saved selection is exactly what the platform would offer anyway is unchanged.
+    if len(saved) == 1 and str(saved[0]) in BUILTIN_TOOLSET_NAMES and str(saved[0]) in {
+        _platform_default_toolset(platform), f"hermes-{platform}",
+    }:
+        return False
+    return True
 
 
 def delegation_reachable(disabled: Any) -> bool:
