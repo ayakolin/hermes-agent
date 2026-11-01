@@ -230,10 +230,14 @@ def session_dispatcher_toolsets(db: Any, session_id: Any, decide: Callable[[], t
                                 ) -> tuple[str, ...] | None:
     """The dispatcher selection of the conversation *session_id* belongs to, or None for a classic one.
 
-    The marker on the compression tip decides. A tip that already built a prompt (or pinned its tools[])
-    without a marker is a classic conversation and stays one. Only a conversation that has built neither
-    asks ``decide()``: its first turn, including one whose row a delivery mirror created first. A store that
-    cannot be read answers classic, the behaviour before dispatcher mode existed."""
+    The marker on the compression tip decides when present: it is written the first time a session is found
+    to be a dispatcher, so later turns and other processes read the same answer without consulting live
+    config again. A conversation with NO marker asks ``decide()``, whether or not it has history: every chat
+    is meant to move to dispatcher mode, and a conversation that ran before the upgrade is exactly what must
+    move. Its stored messages are read-only here, so narrowing the main agent's tool surface changes nothing
+    about them.
+
+    Only a store that cannot be read answers classic, the behaviour before dispatcher mode existed."""
     if db is None or not session_id:
         return decide()
     from hermes_state_sessions import _parse_model_config
@@ -248,4 +252,4 @@ def session_dispatcher_toolsets(db: Any, session_id: Any, decide: Callable[[], t
     stored = marker_toolsets(_parse_model_config(row.get("model_config")).get(SESSION_MARKER_KEY))
     if stored is not None:
         return stored
-    return None if row.get("system_prompt") or row.get("tool_names") else decide()
+    return decide()

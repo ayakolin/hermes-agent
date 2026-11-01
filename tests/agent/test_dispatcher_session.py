@@ -157,14 +157,18 @@ def test_the_marker_decides_the_conversation(tmp_path):
     assert session_dispatcher_toolsets(db, "sid", _decide([])) == (DISPATCHER_TOOLSET, "web")
 
 
-def test_a_conversation_that_built_a_prompt_without_a_marker_stays_classic(tmp_path):
-    """An upgrade never flips an existing chat: only a session that built nothing yet asks the live config."""
+def test_a_conversation_with_history_and_no_marker_asks_the_live_config(tmp_path):
+    """Every chat moves to dispatcher mode, including one that ran before the upgrade.
+
+    History is read-only, so narrowing the main agent's surface changes nothing about stored messages. Only a
+    stored marker (``test_a_marker_decides_without_reading_config``) settles the question without the config."""
     db = _db_with(tmp_path, system_prompt="bytes the session already sends")
-    assert session_dispatcher_toolsets(db, "sid", _decide(calls := [])) is None
-    assert calls == []
+    assert session_dispatcher_toolsets(db, "sid", _decide(calls := [])) == ("dispatcher", "web")
+    assert len(calls) == 1
     pinned = _db_with(tmp_path, system_prompt="bytes the session already sends")
     pinned.update_session_tool_names("sid", {"tools": []})
-    assert session_dispatcher_toolsets(pinned, "sid", _decide(calls := [])) is None and calls == []
+    assert session_dispatcher_toolsets(pinned, "sid", _decide(calls)) == ("dispatcher", "web")
+    assert len(calls) == 2
 
 
 def test_a_conversation_that_built_nothing_asks_the_live_config_once(tmp_path):

@@ -60,13 +60,17 @@ def test_a_marker_carries_the_decision_into_later_turns_and_other_processes(db):
     assert dispatcher_turn_toolsets(_runner(db), _ctx(), "telegram", CLASSIC) == [DISPATCHER_TOOLSET, "web"]
 
 
-def test_a_later_config_edit_never_flips_a_chat_that_built_its_prompt(db):
-    """An upgrade, or ``dispatcher.enabled`` turned off after a chat opened: the chat keeps its surface."""
+def test_a_chat_that_ran_before_the_upgrade_moves_to_dispatcher(db):
+    """Every chat moves, including one whose prompt was built before dispatcher mode existed.
+
+    A config edit still cannot flip a chat that already settled its answer: that answer is the stored marker,
+    written on its first dispatcher turn (see ``test_a_marker_carries_the_decision_into_later_turns``)."""
     db.update_system_prompt("s1", "the prompt this chat already sends")
-    disabled = {"dispatcher": {"enabled": False}}
-    assert dispatcher_turn_toolsets(_runner(db), _ctx(user_config=disabled), "telegram", CLASSIC) == CLASSIC
     enabled = {"dispatcher": {"enabled": True}}
-    assert dispatcher_turn_toolsets(_runner(db), _ctx(user_config=enabled), "telegram", CLASSIC) == CLASSIC
+    assert dispatcher_turn_toolsets(_runner(db), _ctx(user_config=enabled), "telegram", CLASSIC) == [DISPATCHER_TOOLSET]
+    disabled = {"dispatcher": {"enabled": False}}
+    assert dispatcher_turn_toolsets(_runner(db, None), _ctx(session_id="s2", user_config=disabled),
+                                    "telegram", CLASSIC) == CLASSIC
 
 
 def test_a_marker_wins_over_an_edited_config(db):
