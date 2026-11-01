@@ -826,6 +826,8 @@
                 "computer_use",
                 "connector",
                 "delegation",
+                "dispatcher",
+                "executor",
                 "file",
                 "home_automation",
                 "mcp",
@@ -3679,7 +3681,9 @@
                 "vision",
                 "web",
                 "x_search",
-                "yuanbao"
+                "yuanbao",
+                "dispatcher",
+                "executor"
               ]
             },
             "used": {
@@ -4937,6 +4941,8 @@
                 "computer_use",
                 "connector",
                 "delegation",
+                "dispatcher",
+                "executor",
                 "file",
                 "home_automation",
                 "mcp",
