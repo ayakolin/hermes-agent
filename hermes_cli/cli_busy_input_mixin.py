@@ -78,8 +78,9 @@ class CLIBusyInputMixin:
         if mode == "queue" or images or not text:
             return self._busy_queue(text, images, payload, running=running)
         from agent.busy_input_local import supports_redirect
-        if supports_redirect(self.agent):
-            answer = self._busy_call(self.agent.redirect, text)
+        agent = getattr(self, "agent", None)  # a CLI still building its agent has none: classic fallback below
+        if supports_redirect(agent):
+            answer = self._busy_call(agent.redirect, text)
             if answer is True or answer == STEERED:
                 self._busy_print(f"  {t('cli.tui.redirected_turn', preview=_preview(text))}")
                 return "redirect"
@@ -105,9 +106,10 @@ class CLIBusyInputMixin:
         voice stop, consumed), ``False`` refused, None when this submission is not a steer. ``interrupt`` mode
         is redirect-first, even for a dispatcher session; the ladder's own steer rung runs as that redirect's
         fallback below."""
-        if mode != "steer" or images or not text or not hasattr(self.agent, "steer"):
+        agent = getattr(self, "agent", None)
+        if mode != "steer" or images or not text or not hasattr(agent, "steer"):
             return None
-        answer = self._busy_call(self.agent.steer, text)
+        answer = self._busy_call(agent.steer, text)
         from hermes_cli.gateway_agent import VOICE_STOPPED
         if answer == VOICE_STOPPED:
             return True  # TUI-26: consumed as a voice stop; nothing to queue either
